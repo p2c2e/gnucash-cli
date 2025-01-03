@@ -587,18 +587,33 @@ async def generate_balance_sheet(ctx: RunContext[GnuCashQuery]) -> str:
         equity = []
         
         for account in book.accounts:
+            # Only count balances for accounts without children (leaf accounts)
+            # or accounts with direct transactions
             balance = account.get_balance()
-            if account.type == "ASSET":
-                assets.append((account.fullname, balance))
-                total_assets += balance
-            elif account.type == "LIABILITY":
-                liabilities.append((account.fullname, balance))
-                total_liabilities += balance
-            elif account.type == "EQUITY":
-                equity.append((account.fullname, balance))
-                total_equity += balance
+            has_children = bool(account.children)
+            has_splits = any(split.account == account for trans in book.transactions for split in trans.splits)
+            
+            if has_children and not has_splits:
+                # For parent accounts without direct transactions, show balance but don't add to totals
+                if account.type == "ASSET":
+                    assets.append((account.fullname, balance))
+                elif account.type == "LIABILITY":
+                    liabilities.append((account.fullname, balance))
+                elif account.type == "EQUITY":
+                    equity.append((account.fullname, balance))
+            else:
+                # For leaf accounts and accounts with direct transactions, add to totals
+                if account.type == "ASSET":
+                    assets.append((account.fullname, balance))
+                    total_assets += balance
+                elif account.type == "LIABILITY":
+                    liabilities.append((account.fullname, balance))
+                    total_liabilities += balance
+                elif account.type == "EQUITY":
+                    equity.append((account.fullname, balance))
+                    total_equity += balance
         
-        book.close()
+        # book.close()
         
         # Build the ASCII table
         output = []
@@ -609,28 +624,28 @@ async def generate_balance_sheet(ctx: RunContext[GnuCashQuery]) -> str:
         # Assets section
         output.append(Fore.GREEN + "\nASSETS")
         for name, balance in assets:
-            output.append(f"  {name:<40} {Fore.GREEN}${balance:>8.2f}")
+            output.append(f"  {name:<40} {Fore.GREEN}{book.default_currency.mnemonic} {balance:>8.2f}")
         output.append(Fore.GREEN + "-" * 50)
-        output.append(f"  {'Total Assets':<40} {Fore.GREEN}${total_assets:>8.2f}")
+        output.append(f"  {'Total Assets':<40} {Fore.GREEN}{book.default_currency.mnemonic} {total_assets:>8.2f}")
         
         # Liabilities section
         output.append(Fore.RED + "\nLIABILITIES")
         for name, balance in liabilities:
-            output.append(f"  {name:<40} {Fore.RED}${balance:>8.2f}")
+            output.append(f"  {name:<40} {Fore.RED}{book.default_currency.mnemonic} {balance:>8.2f}")
         output.append(Fore.RED + "-" * 50)
-        output.append(f"  {'Total Liabilities':<40} {Fore.RED}${total_liabilities:>8.2f}")
+        output.append(f"  {'Total Liabilities':<40} {Fore.RED}{book.default_currency.mnemonic} {total_liabilities:>8.2f}")
         
         # Equity section
         output.append(Fore.BLUE + "\nEQUITY")
         for name, balance in equity:
-            output.append(f"  {name:<40} {Fore.BLUE}${balance:>8.2f}")
+            output.append(f"  {name:<40} {Fore.BLUE}{book.default_currency.mnemonic} {balance:>8.2f}")
         output.append(Fore.BLUE + "-" * 50)
-        output.append(f"  {'Total Equity':<40} {Fore.BLUE}${total_equity:>8.2f}")
+        output.append(f"  {'Total Equity':<40} {Fore.BLUE}{book.default_currency.mnemonic} {total_equity:>8.2f}")
         
         # Final totals
         output.append(Fore.YELLOW + "=" * 50)
         net_worth = total_assets - total_liabilities
-        output.append(f"  {'Net Worth':<40} {Fore.CYAN}${net_worth:>8.2f}")
+        output.append(f"  {'Net Worth':<40} {Fore.CYAN}{book.default_currency.mnemonic} {net_worth:>8.2f}")
         output.append(Fore.YELLOW + "=" * 50)
         
         return "\n".join(output)
@@ -988,6 +1003,119 @@ async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: st
         return f"Error creating accounts from file: {str(e)}"
 
 @gnucash_agent.tool
+async def get_default_currency(ctx: RunContext[GnuCashQuery]) -> str:
+    """Get the default currency for the active book.
+    
+    Returns:
+        str: Current default currency code or error message
+        
+    Raises:
+        ValueError: If no active book
+    """
+    global active_book
+    if not active_book:
+        return "No active book. Please create or open a book first."
+    
+    try:
+        book = piecash.open_book(active_book, open_if_lock=True, readonly=True)
+        currency_code = book.default_currency.mnemonic
+        book.close()
+        print(Fore.YELLOW + f"DEBUG: Got default currency: {currency_code}")
+        return f"Default currency is {currency_code}"
+        
+    except Exception as e:
+        return f"Error getting default currency: {str(e)}"
+
+@gnucash_agent.tool
+async def set_accounts_currency(ctx: RunContext[GnuCashQuery], currency_code: str) -> str:
+    """Set the currency for all accounts in the active book.
+    
+    Args:
+        currency_code (str): Three-letter ISO currency code (e.g., 'USD', 'EUR', 'GBP')
+        
+    Returns:
+        str: Success message or error details
+        
+    Raises:
+        ValueError: If no active book or invalid currency code
+        piecash.BookError: If currency change fails
+    """
+    global active_book
+    if not active_book:
+        return "No active book. Please create or open a book first."
+    
+    if not currency_code or len(currency_code) != 3:
+        return "Invalid currency code. Must be a 3-letter ISO code (e.g., USD, EUR, GBP)"
+    
+    try:
+        book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
+        currency_code = currency_code.upper()
+        
+        with book:
+            # Attempt to get the currency (will raise if invalid)
+            new_currency = book.currencies(mnemonic=currency_code)
+            if not new_currency:
+                return f"Invalid currency code: {currency_code}"
+            
+            # Update all accounts except ROOT
+            updated = 0
+            for account in book.accounts:
+                if account.type != "ROOT":
+                    account.commodity = new_currency
+                    updated += 1
+                    
+            book.save()
+            
+        book.close()
+        print(Fore.YELLOW + f"DEBUG: Changed currency to {currency_code} for {updated} accounts")
+        return f"Successfully set currency to {currency_code} for {updated} accounts"
+        
+    except Exception as e:
+        return f"Error setting accounts currency: {str(e)}"
+
+@gnucash_agent.tool
+async def set_default_currency(ctx: RunContext[GnuCashQuery], currency_code: str) -> str:
+    """Set the default currency for the active book.
+    
+    Args:
+        currency_code (str): Three-letter ISO currency code (e.g., 'USD', 'EUR', 'GBP')
+        
+    Returns:
+        str: Success message or error details
+        
+    Raises:
+        ValueError: If no active book or invalid currency code
+        piecash.BookError: If currency change fails
+    """
+    global active_book
+    if not active_book:
+        return "No active book. Please create or open a book first."
+    
+    if not currency_code or len(currency_code) != 3:
+        return "Invalid currency code. Must be a 3-letter ISO code (e.g., USD, EUR, GBP)"
+    
+    try:
+        book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
+        currency_code = currency_code.upper()
+        
+        with book:
+            # Attempt to get the currency (will raise if invalid)
+            new_currency = book.currencies(mnemonic=currency_code)
+            if not new_currency:
+                return f"Invalid currency code: {currency_code}"
+                
+            # Set as default currency
+            book.default_currency = new_currency
+            book.save()
+            
+        book.close()
+        print(Fore.YELLOW + f"DEBUG: Changed default currency to {currency_code}")
+        return f"Successfully set default currency to {currency_code}"
+        
+    except Exception as e:
+        return f"Error setting default currency: {str(e)}"
+
+@gnucash_agent.tool
 async def save_as_template(ctx: RunContext[GnuCashQuery], template_name: str) -> str:
     """Save current book as a template by copying account structure without transactions.
     
@@ -1120,6 +1248,9 @@ def run_cli(book_name: str = None):
         'close_book': 'Close the current book',
         'purge_backups': 'Purge old backups (book_name [--days N | --before YYYY-MM-DD])',
         'save_template': 'Save current book as template without transactions (template_name)',
+        'set_currency': 'Set default currency (USD, EUR, etc)',
+        'get_currency': 'Get current default currency',
+        'set_accounts_currency': 'Set currency for all accounts (USD, EUR, etc)',
         'help': 'Show this help message'
     }
     global active_book
