@@ -988,6 +988,83 @@ async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: st
         return f"Error creating accounts from file: {str(e)}"
 
 @gnucash_agent.tool
+async def save_as_template(ctx: RunContext[GnuCashQuery], template_name: str) -> str:
+    """Save current book as a template by copying account structure without transactions.
+    
+    Creates a new GnuCash file with:
+    - All accounts from current book
+    - Same currency settings
+    - No transactions
+    - No scheduled transactions
+    - Preserves account hierarchies and properties
+    
+    Args:
+        template_name (str): Name for the template file (without .gnucash extension)
+        
+    Returns:
+        str: Success message or error details
+        
+    Raises:
+        ValueError: If no active book or invalid template name
+        piecash.BookError: If template creation fails
+    """
+    global active_book
+    if not active_book:
+        return "No active book. Please create or open a book first."
+    
+    if not template_name:
+        return "Template name is required."
+        
+    try:
+        # Open source book
+        source_book = piecash.open_book(active_book, open_if_lock=True, readonly=True)
+        
+        # Create new template book
+        template_path = f"{template_name}.gnucash"
+        template_book = piecash.create_book(
+            template_path,
+            overwrite=True,
+            currency=source_book.default_currency.mnemonic,
+            keep_foreign_keys=False
+        )
+        
+        print(Fore.YELLOW + f"DEBUG: Creating template {template_path} from {active_book}")
+        
+        def copy_account_structure(src_account, parent=None):
+            """Recursively copy account hierarchy without transactions."""
+            if src_account.type == "ROOT":
+                dest_parent = template_book.root_account
+            else:
+                # Create new account in template
+                dest_account = Account(
+                    name=src_account.name,
+                    type=src_account.type,
+                    commodity=template_book.default_currency,
+                    parent=parent or template_book.root_account,
+                    description=src_account.description,
+                    code=src_account.code,
+                    placeholder=src_account.placeholder
+                )
+                dest_parent = dest_account
+            
+            # Recursively copy children
+            for child in src_account.children:
+                copy_account_structure(child, dest_parent)
+        
+        # Copy account hierarchy
+        with template_book:
+            copy_account_structure(source_book.root_account)
+            template_book.save()
+        
+        source_book.close()
+        template_book.close()
+        
+        print(Fore.YELLOW + f"DEBUG: Template saved as {template_path}")
+        return f"Successfully created template {template_path} from {active_book}"
+    
+    except Exception as e:
+        return f"Error creating template: {str(e)}"
+
 async def generate_reports(ctx: RunContext[GnuCashQuery]) -> str:
     """Generate standard financial reports from the GnuCash book.
     
@@ -1042,6 +1119,7 @@ def run_cli(book_name: str = None):
         'generate_reports': 'Generate financial reports',
         'close_book': 'Close the current book',
         'purge_backups': 'Purge old backups (book_name [--days N | --before YYYY-MM-DD])',
+        'save_template': 'Save current book as template without transactions (template_name)',
         'help': 'Show this help message'
     }
     global active_book
