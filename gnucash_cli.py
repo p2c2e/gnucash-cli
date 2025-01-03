@@ -909,9 +909,6 @@ async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: st
             # Process all accounts first, then save once at the end
             accounts_to_create = []
             for acc in accounts:
-                print("*"*50)
-                print(acc)
-                print("="*50)
                 try:
                     # Check if account already exists
                     fullname = f"{parent.fullname}:{acc['name']}" if parent else acc['name']
@@ -920,13 +917,13 @@ async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: st
                     results.append(f"Error preparing account {acc.get('name', '')}: {str(e)}")
                     continue
 
-            print("BEFORE ...........")
-            # Now create accounts in a fresh session
-            # with book:
-            for acc, fullname in accounts_to_create:
-                print(acc)
-                print(fullname)
-            print("WITHIN ..........")
+            # print("BEFORE ...........")
+            # # Now create accounts in a fresh session
+            # # with book:
+            # for acc, fullname in accounts_to_create:
+            #     print(acc)
+            #     print(fullname)
+            # print("WITHIN ..........")
 
             for acc, fullname in accounts_to_create:
                 print(Fore.YELLOW + f"DEBUG: Processing account: {fullname}")
@@ -947,7 +944,7 @@ async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: st
                     print(Fore.YELLOW + f"DEBUG: Creating new account: {acc['name']} of type {acc.get('type', 'ASSET')}")
                     new_acc = Account(
                         name=acc['name'],
-                        type=acc.get('type', 'ASSET').upper(),
+                        type=acc.get('type', parent.type if parent is not None else "ASSET").upper(), # default to parent account type
                         commodity=book.default_currency,
                         parent=parent or book.root_account,
                         description=acc.get('description', '')
@@ -1045,8 +1042,6 @@ async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: st
         return "\n".join(results)
     
     except Exception as e:
-        print("#"*50)
-        print(str(e))
         return f"Error creating accounts from file: {str(e)}"
 
 @gnucash_agent.tool

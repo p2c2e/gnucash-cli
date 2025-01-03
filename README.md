@@ -18,8 +18,12 @@ A command-line interface for managing GnuCash books with advanced features for a
 2. Install dependencies:
 ```bash
 pip install piecash colorama python-dotenv pydantic pydantic-ai pandas PyYAML
+``` 
+OR
 ```
-
+uv sync 
+```
+NOTE: You WILL need an OpenAI Key and should be set and saved in a file called .env at the root of this project 
 ## Quick Start
 
 1. Start the CLI:
@@ -39,7 +43,7 @@ GnuCash> create_book mybook
 
 ## Bulk Account Creation
 
-You can create multiple accounts at once using a YAML file. Example structure (init.accounts):
+You can create multiple accounts at once using a YAML file. Example structure (SampleAccounts.yaml):
 
 ```yaml
 accounts:
@@ -62,12 +66,12 @@ accounts:
 
 To create accounts from a YAML file:
 ```
-GnuCash> create_accounts_from_file init.accounts
+GnuCash> create_accounts_from_file SampleAccounts.yaml
 ```
 OR (NOTE: This is true for all the command in this README)
 Use a freeform way of mentioning your ask _like_ below:
 ```
-GnuCash> init from init.account
+GnuCash> init from SampleAccounts.yaml
 ```
 ## Available Commands
 
