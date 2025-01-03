@@ -63,8 +63,7 @@ async def create_book(ctx: RunContext[GnuCashQuery], book_name: str = "sample_ac
         book_name (str): Name of the book to create (without .gnucash extension)
                         Defaults to "sample_accounts"
 
-    Returns:
-        str: Success message or error details
+    Returns str: Success message or error details
 
     Raises:
         piecash.BookError: If book creation fails
@@ -142,8 +141,7 @@ async def get_active_book(ctx: RunContext[GnuCashQuery]) -> str:
     The active book is tracked globally and used for all operations.
     Use create_book() or open_book() to set the active book.
 
-    Returns:
-        str: Name of the active book with .gnucash extension if set,
+    Returns - str: Name of the active book with .gnucash extension if set,
              or message indicating no active book
     """
     global active_book
@@ -163,8 +161,7 @@ async def open_book(ctx: RunContext[GnuCashQuery], book_name: str) -> str:
     Args:
         book_name (str): Name of the book to open (must include .gnucash extension)
 
-    Returns:
-        str: Success message or error details
+    Returns -  str: Success message or error details
 
     Raises:
         FileNotFoundError: If book file doesn't exist
@@ -196,8 +193,7 @@ async def list_accounts(ctx: RunContext[GnuCashQuery]) -> str:
     - Current balance
     - Account description
 
-    Returns:
-        str: Formatted table of accounts or error message if no active book
+    Returns - str: Formatted table of accounts or error message if no active book
 
     Raises:
         piecash.BookError: If book access fails
@@ -247,8 +243,7 @@ async def transfer_funds(ctx: RunContext[GnuCashQuery], from_account: str, to_ac
         amount (float): Amount to transfer (must be positive)
         description (str): Description for the transaction (default: "Fund transfer")
         
-    Returns:
-        str: Success message with transfer details or error message
+    Returns - str: Success message with transfer details or error message
 
     Raises:
         ValueError: If amount is invalid or accounts don't exist
@@ -318,8 +313,7 @@ async def create_subaccount(
         description (str, optional): Description for the new account
         initial_balance (float, optional): Initial balance to set for the account
         
-    Returns:
-        str: Success message with account details or error message
+    Returns - str: Success message with account details or error message
 
     Raises:
         ValueError: If account type is invalid or parent doesn't exist
@@ -401,7 +395,6 @@ async def add_transaction(
     to_accounts: list[dict[str, Union[str, float]]],
     description: str = "Fund transfer"
 ) -> str:
-    print(Fore.YELLOW + "DEBUG: Starting add_transaction")
     """Add a transaction with multiple splits (one-to-many transfer).
     
     Creates a double-entry transaction with:
@@ -418,13 +411,14 @@ async def add_transaction(
             - 'amount': Positive amount to credit
         description (str): Description for the transaction
         
-    Returns:
-        str: Success message with transaction details or error message
+    Returns - str: Success message with transaction details or error message
 
     Raises:
         ValueError: If accounts don't exist or amounts are invalid
         piecash.BookError: If transaction creation fails
     """
+    print(Fore.YELLOW + "DEBUG: Starting add_transaction")
+
     global active_book
     if not active_book:
         return "No active book. Please create or open a book first."
@@ -501,8 +495,7 @@ async def list_transactions(ctx: RunContext[GnuCashQuery], limit: int = 10) -> s
     Args:
         limit (int): Maximum number of transactions to return (default: 10)
         
-    Returns:
-        str: Formatted list of transactions with splits or error message
+    Returns - str: Formatted list of transactions with splits or error message
 
     Raises:
         piecash.BookError: If book access fails
@@ -553,18 +546,17 @@ async def list_transactions(ctx: RunContext[GnuCashQuery], limit: int = 10) -> s
 
 @gnucash_agent.tool
 async def generate_balance_sheet(ctx: RunContext[GnuCashQuery]) -> str:
-    """Generate an ASCII formatted balance sheet.
+    """Generate an ASCII formatted balance sheet with proper account hierarchy and roll-up totals.
     
-    The balance sheet shows:
-    - Assets (with total)
-    - Liabilities (with total)
-    - Equity (with total)
-    - Net worth calculation
+    Implements bottom-up calculation of account balances with:
+    - Proper parent/child roll-up totals
+    - Hierarchical indentation
+    - Subtotals at each level
+    - Sign conventions maintained
     
     All amounts are in the book's default currency.
 
-    Returns:
-        str: Formatted balance sheet or error message
+    Returns - str: Formatted balance sheet or error message
 
     Raises:
         piecash.BookError: If book access fails
@@ -576,78 +568,109 @@ async def generate_balance_sheet(ctx: RunContext[GnuCashQuery]) -> str:
     try:
         book = piecash.open_book(active_book, open_if_lock=True, readonly=True)
         
-        # Initialize totals
-        total_assets = Decimal('0.00')
-        total_liabilities = Decimal('0.00')
-        total_equity = Decimal('0.00')
-        
-        # Collect account balances
-        assets = []
-        liabilities = []
-        equity = []
-        
-        for account in book.accounts:
-            # Only count balances for accounts without children (leaf accounts)
-            # or accounts with direct transactions
-            balance = account.get_balance()
-            has_children = bool(account.children)
-            has_splits = any(split.account == account for trans in book.transactions for split in trans.splits)
+        def get_account_hierarchy(account, indent_level=0):
+            """Recursively build account hierarchy with proper totals."""
+            # Skip root account
+            if account.type == "ROOT":
+                return [], Decimal('0')
+                
+            # Calculate this account's own balance (from direct transactions)
+            own_balance = sum(split.value for trans in book.transactions 
+                            for split in trans.splits if split.account == account)
             
-            if has_children and not has_splits:
-                # For parent accounts without direct transactions, show balance but don't add to totals
-                if account.type == "ASSET":
-                    assets.append((account.fullname, balance))
-                elif account.type == "LIABILITY":
-                    liabilities.append((account.fullname, balance))
-                elif account.type == "EQUITY":
-                    equity.append((account.fullname, balance))
+            # Get children's balances recursively
+            child_entries = []
+            children_total = Decimal('0')
+            for child in sorted(account.children, key=lambda x: x.name):
+                child_lines, child_total = get_account_hierarchy(child, indent_level + 1)
+                child_entries.extend(child_lines)
+                children_total += child_total
+            
+            # Total balance is own balance plus children's balances
+            total_balance = own_balance + children_total
+            
+            # Format this account's line
+            indent = "  " * indent_level
+            curr_symbol = book.default_currency.mnemonic
+            
+            entries = []
+            
+            # Add this account's line first
+            if account.children:
+                # Parent account - show total
+                if total_balance != 0 or not account.children:
+                    entries.append((
+                        f"{indent}{account.name}",
+                        total_balance,
+                        True  # is_total
+                    ))
             else:
-                # For leaf accounts and accounts with direct transactions, add to totals
-                if account.type == "ASSET":
-                    assets.append((account.fullname, balance))
-                    total_assets += balance
-                elif account.type == "LIABILITY":
-                    liabilities.append((account.fullname, balance))
-                    total_liabilities += balance
-                elif account.type == "EQUITY":
-                    equity.append((account.fullname, balance))
-                    total_equity += balance
+                # Leaf account - show balance
+                if total_balance != 0:
+                    entries.append((
+                        f"{indent}{account.name}",
+                        total_balance,
+                        False  # not a total
+                    ))
+            
+            # Add children's lines after parent
+            if child_entries:
+                entries.extend(child_entries)
+            
+            return entries, total_balance
         
-        # book.close()
+        # Process each main section
+        sections = {
+            "ASSET": (Fore.GREEN, "ASSETS"),
+            "LIABILITY": (Fore.RED, "LIABILITIES"),
+            "EQUITY": (Fore.BLUE, "EQUITY")
+        }
         
-        # Build the ASCII table
         output = []
-        output.append(Fore.YELLOW + "=" * 50)
-        output.append(Fore.CYAN + " BALANCE SHEET".center(50))
-        output.append(Fore.YELLOW + "=" * 50)
+        output.append(Fore.YELLOW + "=" * 60)
+        output.append(Fore.CYAN + " BALANCE SHEET".center(60))
+        output.append(Fore.YELLOW + "=" * 60)
         
-        # Assets section
-        output.append(Fore.GREEN + "\nASSETS")
-        for name, balance in assets:
-            output.append(f"  {name:<40} {Fore.GREEN}{book.default_currency.mnemonic} {balance:>8.2f}")
-        output.append(Fore.GREEN + "-" * 50)
-        output.append(f"  {'Total Assets':<40} {Fore.GREEN}{book.default_currency.mnemonic} {total_assets:>8.2f}")
+        section_totals = {}
         
-        # Liabilities section
-        output.append(Fore.RED + "\nLIABILITIES")
-        for name, balance in liabilities:
-            output.append(f"  {name:<40} {Fore.RED}{book.default_currency.mnemonic} {balance:>8.2f}")
-        output.append(Fore.RED + "-" * 50)
-        output.append(f"  {'Total Liabilities':<40} {Fore.RED}{book.default_currency.mnemonic} {total_liabilities:>8.2f}")
-        
-        # Equity section
-        output.append(Fore.BLUE + "\nEQUITY")
-        for name, balance in equity:
-            output.append(f"  {name:<40} {Fore.BLUE}{book.default_currency.mnemonic} {balance:>8.2f}")
-        output.append(Fore.BLUE + "-" * 50)
-        output.append(f"  {'Total Equity':<40} {Fore.BLUE}{book.default_currency.mnemonic} {total_equity:>8.2f}")
+        # Process each main section
+        for acc_type, (color, title) in sections.items():
+            output.append(f"\n{color}{title}")
+            
+            # Find top-level accounts of this type
+            top_accounts = [acc for acc in book.root_account.children 
+                          if acc.type == acc_type]
+            
+            section_entries = []
+            section_total = Decimal('0')
+            
+            # Process each top-level account
+            for account in sorted(top_accounts, key=lambda x: x.name):
+                entries, total = get_account_hierarchy(account)
+                section_entries.extend(entries)
+                section_total += total
+            
+            # Add entries with proper formatting
+            curr_symbol = book.default_currency.mnemonic
+            for name, amount, is_total in section_entries:
+                if is_total:
+                    output.append(f"{color}{name:<40} {curr_symbol} {amount:>10,.2f}")
+                else:
+                    output.append(f"{color}{name:<40} {curr_symbol} {amount:>10,.2f}")
+            
+            # Add section total
+            output.append(color + "-" * 60)
+            output.append(f"{color}{'Total ' + title:<40} {curr_symbol} {section_total:>10,.2f}")
+            
+            section_totals[acc_type] = section_total
         
         # Final totals
-        output.append(Fore.YELLOW + "=" * 50)
-        net_worth = total_assets - total_liabilities
-        output.append(f"  {'Net Worth':<40} {Fore.CYAN}{book.default_currency.mnemonic} {net_worth:>8.2f}")
-        output.append(Fore.YELLOW + "=" * 50)
+        output.append(Fore.YELLOW + "=" * 60)
+        net_worth = section_totals.get("ASSET", 0) - section_totals.get("LIABILITY", 0)
+        output.append(f"{Fore.CYAN}{'Net Worth':<40} {curr_symbol} {net_worth:>10,.2f}")
+        output.append(Fore.YELLOW + "=" * 60)
         
+        book.close()
         return "\n".join(output)
     
     except Exception as e:
@@ -668,8 +691,7 @@ async def generate_cashflow_statement(ctx: RunContext[GnuCashQuery], start_date:
         start_date (str, optional): Start date in YYYY-MM-DD format
         end_date (str, optional): End date in YYYY-MM-DD format
         
-    Returns:
-        str: Formatted cash flow statement or error message
+    Returns - str: Formatted cash flow statement or error message
 
     Raises:
         ValueError: If dates are invalid
@@ -680,69 +702,94 @@ async def generate_cashflow_statement(ctx: RunContext[GnuCashQuery], start_date:
         return "No active book. Please create or open a book first."
     
     try:
+        print(Fore.YELLOW + f"DEBUG: Starting cashflow statement generation for book: {active_book}")
         book = piecash.open_book(active_book, open_if_lock=True, readonly=True)
+        print(Fore.YELLOW + f"DEBUG: Book opened successfully")
         
         # Default to YTD if no dates provided
         today = date.today()
         if not start_date:
             start_date = date(today.year, 1, 1).strftime('%Y-%m-%d')
+            print(Fore.YELLOW + f"DEBUG: Using default start date: {start_date}")
         if not end_date:
             end_date = today.strftime('%Y-%m-%d')
+            print(Fore.YELLOW + f"DEBUG: Using default end date: {end_date}")
             
         # Convert to date objects
         start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
         end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+        print(Fore.YELLOW + f"DEBUG: Date range: {start_date} to {end_date}")
         
         # Initialize totals
-        operating = Decimal('0.00')
-        investing = Decimal('0.00')
-        financing = Decimal('0.00')
+        money_in = Decimal('0.00')
+        money_out = Decimal('0.00')
+        print(Fore.YELLOW + "DEBUG: Initialized totals to zero")
+        
+        # Track subcategories
+        income_categories = {}
+        expense_categories = {}
         
         # Categorize transactions
+        transaction_count = 0
         for tx in book.transactions:
+            transaction_count += 1
+            print(Fore.YELLOW + f"\nDEBUG: Processing transaction {transaction_count}: {tx.description} on {tx.post_date}")
+            
             if start_date <= tx.post_date <= end_date:
+                print(Fore.YELLOW + "DEBUG: Transaction within date range")
                 for split in tx.splits:
                     account = split.account
                     amount = split.value
+                    print(Fore.YELLOW + f"DEBUG: Split - Account: {account.fullname} ({account.type}), Amount: {amount}")
                     
-                    # Operating activities (income/expense accounts)
-                    if account.type in ["INCOME", "EXPENSE"]:
-                        operating += amount
-                    # Investing activities (asset accounts)
-                    elif account.type == "ASSET" and account.name not in ["Checking Account", "Savings Account"]:
-                        investing += amount
-                    # Financing activities (liability/equity accounts)
-                    elif account.type in ["LIABILITY", "EQUITY"]:
-                        financing += amount
-        
-        book.close()
+                    # Income accounts (money in)
+                    if account.type == "INCOME":
+                        money_in += abs(amount)  # Use absolute value for consistent sign
+                        category = account.name
+                        income_categories[category] = income_categories.get(category, Decimal('0.00')) + abs(amount)
+                        print(Fore.YELLOW + f"DEBUG: Added to money in, new total: {money_in}")
+                    
+                    # Expense accounts (money out)
+                    elif account.type == "EXPENSE":
+                        money_out += abs(amount)  # Use absolute value for consistent sign
+                        category = account.name
+                        expense_categories[category] = expense_categories.get(category, Decimal('0.00')) + abs(amount)
+                        print(Fore.YELLOW + f"DEBUG: Added to money out, new total: {money_out}")
+            else:
+                print(Fore.YELLOW + "DEBUG: Transaction outside date range - skipped")
         
         # Calculate net cash flow
-        net_cash_flow = operating + investing + financing
+        net_cash_flow = money_in - money_out
         
         # Build the ASCII table
         output = []
-        output.append(Fore.YELLOW + "=" * 50)
-        output.append(Fore.CYAN + " CASH FLOW STATEMENT".center(50))
-        output.append(Fore.YELLOW + f"Period: {start_date} to {end_date}".center(50))
-        output.append(Fore.YELLOW + "=" * 50)
+        output.append(Fore.YELLOW + "=" * 60)
+        output.append(Fore.CYAN + " CASH FLOW STATEMENT".center(60))
+        output.append(Fore.YELLOW + f"Period: {start_date} to {end_date}".center(60))
+        output.append(Fore.YELLOW + "=" * 60)
         
-        # Operating Activities
-        output.append(Fore.GREEN + "\nOPERATING ACTIVITIES")
-        output.append(f"  Net cash from operations: {Fore.GREEN}${operating:>12.2f}")
+        # Money Incoming Section
+        output.append(Fore.GREEN + "\nMONEY INCOMING")
+        curr_symbol = book.default_currency.mnemonic
+        for category, amount in sorted(income_categories.items()):
+            output.append(f"  {category:<30} {Fore.GREEN}{curr_symbol} {amount:>12.2f}")
+        output.append(Fore.GREEN + "-" * 60)
+        output.append(f"  {'Total Money In':<30} {Fore.GREEN}{curr_symbol} {money_in:>12.2f}")
         
-        # Investing Activities
-        output.append(Fore.BLUE + "\nINVESTING ACTIVITIES")
-        output.append(f"  Net cash from investing: {Fore.BLUE}${investing:>12.2f}")
-        
-        # Financing Activities
-        output.append(Fore.MAGENTA + "\nFINANCING ACTIVITIES")
-        output.append(f"  Net cash from financing: {Fore.MAGENTA}${financing:>12.2f}")
+        # Money Outflow Section
+        output.append(Fore.RED + "\nMONEY OUTFLOW")
+        for category, amount in sorted(expense_categories.items()):
+            output.append(f"  {category:<30} {Fore.RED}{curr_symbol} {amount:>12.2f}")
+        output.append(Fore.RED + "-" * 60)
+        output.append(f"  {'Total Money Out':<30} {Fore.RED}{curr_symbol} {money_out:>12.2f}")
         
         # Net Cash Flow
-        output.append(Fore.YELLOW + "-" * 50)
-        output.append(f"  Net increase in cash: {Fore.CYAN}${net_cash_flow:>12.2f}")
-        output.append(Fore.YELLOW + "=" * 50)
+        output.append(Fore.YELLOW + "=" * 60)
+        color = Fore.GREEN if net_cash_flow >= 0 else Fore.RED
+        output.append(f"  {'Net Cash Flow':<30} {color}{curr_symbol} {net_cash_flow:>12.2f}")
+        output.append(Fore.YELLOW + "=" * 60)
+
+        book.close()
         
         return "\n".join(output)
     
@@ -756,7 +803,6 @@ async def purge_backups(
     days: int = None,
     before_date: str = None
 ) -> str:
-    print(Fore.YELLOW + f"DEBUG: Starting purge_backups for {book_name}")
     """Purge old backup files for a GnuCash book.
     
     Deletes backup files matching the pattern {book_name}.gnucash.YYYYMMDDHHMMSS.gnucash
@@ -769,13 +815,15 @@ async def purge_backups(
         days (int, optional): Delete backups older than this many days
         before_date (str, optional): Delete backups before this date (YYYY-MM-DD format)
         
-    Returns:
-        str: Summary of deleted files and remaining backups
+    Returns - str: Summary of deleted files and remaining backups
         
     Raises:
         ValueError: If neither days nor before_date provided
         FileNotFoundError: If no backups found
     """
+
+    print(Fore.YELLOW + f"DEBUG: Starting purge_backups for {book_name}")
+
     if not days and not before_date:
         raise ValueError("Must specify either days or before_date parameter")
     
@@ -831,8 +879,7 @@ async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: st
     Args:
         file_path (str): Path to YAML file containing account structure
         
-    Returns:
-        str: Summary of created accounts and any errors
+    Returns - str: Summary of created accounts and any errors
         
     Raises:
         FileNotFoundError: If YAML file doesn't exist
@@ -1006,8 +1053,7 @@ async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: st
 async def get_default_currency(ctx: RunContext[GnuCashQuery]) -> str:
     """Get the default currency for the active book.
     
-    Returns:
-        str: Current default currency code or error message
+    Returns - str: Current default currency code or error message
         
     Raises:
         ValueError: If no active book
@@ -1033,8 +1079,7 @@ async def set_accounts_currency(ctx: RunContext[GnuCashQuery], currency_code: st
     Args:
         currency_code (str): Three-letter ISO currency code (e.g., 'USD', 'EUR', 'GBP')
         
-    Returns:
-        str: Success message or error details
+    Returns - str: Success message or error details
         
     Raises:
         ValueError: If no active book or invalid currency code
@@ -1080,8 +1125,7 @@ async def set_default_currency(ctx: RunContext[GnuCashQuery], currency_code: str
     Args:
         currency_code (str): Three-letter ISO currency code (e.g., 'USD', 'EUR', 'GBP')
         
-    Returns:
-        str: Success message or error details
+    Returns - str: Success message or error details
         
     Raises:
         ValueError: If no active book or invalid currency code
@@ -1129,8 +1173,7 @@ async def save_as_template(ctx: RunContext[GnuCashQuery], template_name: str) ->
     Args:
         template_name (str): Name for the template file (without .gnucash extension)
         
-    Returns:
-        str: Success message or error details
+    Returns - str: Success message or error details
         
     Raises:
         ValueError: If no active book or invalid template name
@@ -1201,8 +1244,7 @@ async def generate_reports(ctx: RunContext[GnuCashQuery]) -> str:
     - Transaction history
     - Monthly summary by category
 
-    Returns:
-        str: Formatted reports or error message
+    Returns - str: Formatted reports or error message
 
     Raises:
         piecash.BookError: If book access fails
