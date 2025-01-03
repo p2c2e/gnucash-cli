@@ -153,6 +153,18 @@ Update all accounts' currency:
 GnuCash> set currency for all accounts to EUR
 ```
 
+## Reports
+
+Show Cashflow or Balance sheet
+``` 
+GnuCash> Show cashflow report for 2025
+```
+
+Show Balance Sheet
+``` 
+GnuCash> Generate Bal Sheet
+```
+
 ## Templates
 
 Save current book structure as template:
