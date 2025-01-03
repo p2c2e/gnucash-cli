@@ -1,15 +1,19 @@
-from typing import Union, Optional, Dict
+import warnings
+from typing import Union, Optional
+
+from colorama import Fore, init
+from dotenv import load_dotenv
 from pydantic import BaseModel
 from pydantic_ai import Agent, RunContext
-from dotenv import load_dotenv
-import warnings
-from colorama import Fore, Back, Style, init
+
 init(autoreset=True)  # Auto reset colors after each print
-from datetime import datetime, date, timedelta
+from datetime import date, timedelta
 import glob
 import os
+import yaml
 from decimal import Decimal
 from piecash import Account, Transaction, Split
+from datetime import datetime
 import piecash
 import pandas as pd
 import sqlalchemy as sa
@@ -125,6 +129,7 @@ async def create_book(ctx: RunContext[GnuCashQuery], book_name: str = "sample_ac
             # ... (include all account and transaction creation code from testcase.py)
 
             book.save()
+        print(Fore.YELLOW + f"DEBUG: Completed create_book for {book_name}")
         return "Successfully created sample GnuCash book with accounts and transactions."
     
     except Exception as e:
@@ -143,7 +148,9 @@ async def get_active_book(ctx: RunContext[GnuCashQuery]) -> str:
     """
     global active_book
     if active_book:
+        print(Fore.YELLOW + f"DEBUG: Completed get_active_book - found {active_book}")
         return f"Active book: {active_book}"
+    print(Fore.YELLOW + "DEBUG: Completed get_active_book - no active book")
     return "No active book - create or open one first"
 
 @gnucash_agent.tool
@@ -173,6 +180,7 @@ async def open_book(ctx: RunContext[GnuCashQuery], book_name: str) -> str:
         
         active_book = book_name
         print(f"Active book set to: {active_book}")
+        print(Fore.YELLOW + f"DEBUG: Completed open_book for {book_name}")
         return f"Successfully opened book: {book_name} (ignored lock if present)"
     except Exception as e:
         print(f"Error opening book: {str(e)}")
@@ -218,6 +226,7 @@ async def list_accounts(ctx: RunContext[GnuCashQuery]) -> str:
             
         # Format as a table
         df = pd.DataFrame(accounts)
+        print(Fore.YELLOW + "DEBUG: Completed list_accounts")
         return "Accounts in the book:\n" + df.to_string(index=False)
     
     except Exception as e:
@@ -281,6 +290,7 @@ async def transfer_funds(ctx: RunContext[GnuCashQuery], from_account: str, to_ac
             book.save()
         
         book.close()
+        print(Fore.YELLOW + f"DEBUG: Completed transfer_funds {from_account} -> {to_account} ${amount:.2f}")
         return f"Successfully transferred ${amount:.2f} from {from_account} to {to_account}"
     
     except Exception as e:
@@ -288,7 +298,7 @@ async def transfer_funds(ctx: RunContext[GnuCashQuery], from_account: str, to_ac
 
 @gnucash_agent.tool
 async def create_subaccount(
-    ctx: RunContext[GnuCashQuery], 
+    ctx: RunContext[GnuCashQuery],
     parent_account: str,
     account_name: str,
     account_type: str = "ASSET",
@@ -378,6 +388,7 @@ async def create_subaccount(
         book.close()
         if initial_balance != 0:
             return f"Successfully created subaccount '{account_name}' under '{parent_account}' with initial balance of {initial_balance}"
+        print(Fore.YELLOW + f"DEBUG: Completed create_subaccount {parent_account}/{account_name}")
         return f"Successfully created subaccount '{account_name}' under '{parent_account}'"
     
     except Exception as e:
@@ -390,6 +401,7 @@ async def add_transaction(
     to_accounts: list[dict[str, Union[str, float]]],
     description: str = "Fund transfer"
 ) -> str:
+    print(Fore.YELLOW + "DEBUG: Starting add_transaction")
     """Add a transaction with multiple splits (one-to-many transfer).
     
     Creates a double-entry transaction with:
@@ -468,6 +480,7 @@ async def add_transaction(
         
         # Format success message
         details = "\n".join(f"  - {acc_name}: ${amount:.2f}" for acc_name, amount in to_accounts)
+        print(Fore.YELLOW + "DEBUG: Completed add_transaction")
         return f"Successfully transferred ${total_amount:.2f} from {from_account} to:\n{details}"
     
     except Exception as e:
@@ -532,6 +545,7 @@ async def list_transactions(ctx: RunContext[GnuCashQuery], limit: int = 10) -> s
                 color = Fore.RED if split['Amount'] < 0 else Fore.GREEN
                 output.append(f"  {split['Account']}: {color}{split['Amount']:+.2f} {Fore.RESET}{split['Memo']}")
         
+        print(Fore.YELLOW + f"DEBUG: Completed list_transactions (limit={limit})")
         return "\n".join(output)
     
     except Exception as e:
@@ -727,6 +741,7 @@ async def purge_backups(
     days: int = None,
     before_date: str = None
 ) -> str:
+    print(Fore.YELLOW + f"DEBUG: Starting purge_backups for {book_name}")
     """Purge old backup files for a GnuCash book.
     
     Deletes backup files matching the pattern {book_name}.gnucash.YYYYMMDDHHMMSS.gnucash
@@ -791,7 +806,186 @@ async def purge_backups(
         result.append(Fore.GREEN + f"\n{len(remaining)} backups remain:")
         result.extend(f"  - {f}" for f in remaining)
     
+    print(Fore.YELLOW + f"DEBUG: Completed purge_backups for {book_name}")
     return "\n".join(result)
+
+@gnucash_agent.tool
+async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: str) -> str:
+    """Create account hierarchy from a YAML file.
+    
+    Args:
+        file_path (str): Path to YAML file containing account structure
+        
+    Returns:
+        str: Summary of created accounts and any errors
+        
+    Raises:
+        FileNotFoundError: If YAML file doesn't exist
+        yaml.YAMLError: If YAML is invalid
+    """
+    global active_book
+    if not active_book:
+        return "No active book. Please create or open a book first."
+    
+    try:
+        print(Fore.YELLOW + f"DEBUG: Attempting to load YAML file from {file_path}")
+        # Load YAML file
+        with open(file_path, 'r') as f:
+            account_data = yaml.safe_load(f)
+        
+        if not account_data or 'accounts' not in account_data:
+            print(Fore.RED + "DEBUG: Invalid YAML format - missing 'accounts' section")
+            return "Invalid YAML format - missing 'accounts' section"
+            
+        print(Fore.YELLOW + f"DEBUG: YAML file loaded successfully, found {len(account_data['accounts'])} root accounts")
+        book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
+        results = []
+        
+        def create_accounts(accounts, parent=None):
+            print(Fore.YELLOW + f"DEBUG: Processing {len(accounts)} accounts under parent: {parent.fullname if parent else 'root'}")
+            
+            # Process all accounts first, then save once at the end
+            accounts_to_create = []
+            for acc in accounts:
+                print("*"*50)
+                print(acc)
+                print("="*50)
+                try:
+                    # Check if account already exists
+                    fullname = f"{parent.fullname}:{acc['name']}" if parent else acc['name']
+                    accounts_to_create.append((acc, fullname))
+                except Exception as e:
+                    results.append(f"Error preparing account {acc.get('name', '')}: {str(e)}")
+                    continue
+
+            print("BEFORE ...........")
+            # Now create accounts in a fresh session
+            # with book:
+            for acc, fullname in accounts_to_create:
+                print(acc)
+                print(fullname)
+            print("WITHIN ..........")
+
+            for acc, fullname in accounts_to_create:
+                print(Fore.YELLOW + f"DEBUG: Processing account: {fullname}")
+                # Search for existing account with matching name and parent
+                existing = next(
+                    (a for a in book.accounts
+                     if a.name == acc['name'] and
+                     (parent is None or a.parent == parent)),
+                    None
+                )
+
+                if existing:
+                    print(Fore.YELLOW + f"DEBUG: Account already exists: {fullname} - checking for children")
+                    results.append(f"Account already exists: {fullname} - checking for children")
+                    new_acc = existing
+                else:
+                    # Create new account
+                    print(Fore.YELLOW + f"DEBUG: Creating new account: {acc['name']} of type {acc.get('type', 'ASSET')}")
+                    new_acc = Account(
+                        name=acc['name'],
+                        type=acc.get('type', 'ASSET').upper(),
+                        commodity=book.default_currency,
+                        parent=parent or book.root_account,
+                        description=acc.get('description', '')
+                    )
+                    # Save immediately after account creation
+                    book.save()
+                    print(Fore.YELLOW + f"DEBUG: Created and saved new account: {new_acc.fullname}")
+
+                # Handle initial balance if provided
+                if 'initial_balance' in acc:
+                    print(Fore.YELLOW + f"DEBUG: Setting initial balance of {acc['initial_balance']} for account {acc['name']} (type: {new_acc.type})")
+                    if new_acc.type == "ASSET":
+                        print(Fore.YELLOW + f"DEBUG: Processing ASSET account {new_acc.fullname}")
+                    balance = Decimal(str(acc['initial_balance']))
+                    # Handle balance date with debug logging
+                    balance_date_str = acc.get('balance_date', date.today().isoformat())
+                    print(Fore.YELLOW + f"DEBUG: Processing balance date string: {balance_date_str}")
+                    try:
+                        balance_date = datetime.strptime(balance_date_str, '%Y-%m-%d').date()
+                        enter_date = datetime.combine(balance_date, datetime.min.time())  # Convert to datetime
+                        print(Fore.YELLOW + f"DEBUG: Parsed balance date: {balance_date} (type: {type(balance_date)})")
+                        print(Fore.YELLOW + f"DEBUG: Using enter_date: {enter_date} (type: {type(enter_date)})")
+                    except Exception as e:
+                        print(Fore.RED + f"ERROR: Failed to parse balance date '{balance_date_str}': {str(e)}")
+                        raise
+
+                    # Create offsetting transaction with specified date
+                    book.save()
+                    print(Fore.YELLOW + f"DEBUG: Account saved successfully before creating transaction")
+
+                    # Refresh account references to ensure they're in the current session
+                    new_acc = book.accounts.get(fullname=new_acc.fullname)
+                    equity_acc = book.accounts.get(fullname="Equity")
+                    if not new_acc or not equity_acc:
+                        raise ValueError("Failed to refresh account references in session")
+
+                    print(Fore.YELLOW + f"DEBUG: Checking account type for transaction creation: {new_acc.type}")
+                    if new_acc.type in ["ASSET", "BANK"]:
+                        print(Fore.YELLOW + f"DEBUG: Creating ASSET/BANK transaction for {new_acc.fullname}")
+                        # with book:
+                        print(Fore.YELLOW + f"DEBUG: Creating transaction for {new_acc.fullname} with balance {balance} on {balance_date}")
+                        tx = Transaction(
+                            currency=book.default_currency,
+                            description="Initial balance",
+                            splits=[
+                                Split(account=new_acc, value=balance),
+                                Split(account=equity_acc, value=-balance)
+                            ],
+                            post_date=balance_date,
+                            enter_date=enter_date,  # Use the datetime version
+                        )
+                        print(Fore.YELLOW + f"DEBUG: Transaction created: {tx}")
+                        book.save()
+                        print(Fore.YELLOW + f"DEBUG: Transaction saved successfully")
+                    elif new_acc.type in ["LIABILITY", "CREDIT"]:
+                        # with book:
+                        print(Fore.YELLOW + f"DEBUG: Creating liability transaction for {new_acc.fullname} with balance {balance} on {balance_date}")
+                        tx = Transaction(
+                            currency=book.default_currency,
+                            description="Initial balance",
+                            splits=[
+                                Split(account=new_acc, value=-balance),
+                                Split(account=equity_acc, value=balance)
+                            ],
+                            post_date=balance_date,
+                            enter_date=enter_date,  # Use the datetime version
+                        )
+                        print(Fore.YELLOW + f"DEBUG: Liability transaction created: {tx}")
+                        book.save()
+                        print(Fore.YELLOW + f"DEBUG: Liability transaction saved successfully")
+
+                print(Fore.YELLOW + f"DEBUG: Successfully created account: {fullname}")
+                results.append(f"Created account: {fullname}")
+
+                # Recursively create child accounts (even if account already existed)
+                if 'children' in acc:
+                    print(Fore.YELLOW + f"DEBUG: Found {len(acc['children'])} child accounts for {fullname}")
+                    print(Fore.YELLOW + f"DEBUG: Child accounts: {[c['name'] for c in acc['children']]}")
+
+                    # Process children accounts
+                    parent_acc = book.accounts.get(fullname=new_acc.fullname)
+                    if not parent_acc:
+                        raise ValueError(f"Parent account {new_acc.fullname} not found in session")
+                    create_accounts(acc['children'], parent_acc)
+                else:
+                    print(Fore.YELLOW + f"DEBUG: No children found for {fullname}")
+                
+        # Create accounts in the book
+        with book:
+            create_accounts(account_data['accounts'])
+            book.save()
+        
+        book.close()
+        print(Fore.YELLOW + f"DEBUG: Completed create_accounts_from_file for {file_path}")
+        return "\n".join(results)
+    
+    except Exception as e:
+        print("#"*50)
+        print(str(e))
+        return f"Error creating accounts from file: {str(e)}"
 
 @gnucash_agent.tool
 async def generate_reports(ctx: RunContext[GnuCashQuery]) -> str:
@@ -801,7 +995,7 @@ async def generate_reports(ctx: RunContext[GnuCashQuery]) -> str:
     - Account balances
     - Transaction history
     - Monthly summary by category
-    
+
     Returns:
         str: Formatted reports or error message
 
@@ -828,10 +1022,12 @@ async def generate_reports(ctx: RunContext[GnuCashQuery]) -> str:
         report_str += reports['monthly_summary'].to_string()
         
         book.close()
+        print(Fore.YELLOW + "DEBUG: Completed generate_reports")
         return report_str
     
     except Exception as e:
         return f"Error generating reports: {str(e)}"
+
 
 def run_cli(book_name: str = None):
     """Run the GnuCash CLI interface.
@@ -839,8 +1035,10 @@ def run_cli(book_name: str = None):
     Args:
         book_name (str, optional): Name of book to open at startup
     """
+    print(Fore.YELLOW + "Starting GnuCash CLI...")
     commands = {
         'create_book': 'Create a new sample GnuCash book',
+        'create_accounts': 'Create accounts from YAML file (file_path)',
         'generate_reports': 'Generate financial reports',
         'close_book': 'Close the current book',
         'purge_backups': 'Purge old backups (book_name [--days N | --before YYYY-MM-DD])',
@@ -848,6 +1046,8 @@ def run_cli(book_name: str = None):
     }
     global active_book
     history = []
+    cmd_history = []
+    history_index = 0
     
     # Try to open book if provided
     if book_name:
@@ -866,16 +1066,29 @@ def run_cli(book_name: str = None):
         print("No active book - create or open one to begin")
     
     while True:
-        query = input(Fore.GREEN + "GnuCash> ")
-        if query.lower().strip() == 'quit':
-            break
+        try:
+            # Read input with history support
+            query = input(Fore.GREEN + "GnuCash> ")
             
-        result = gnucash_agent.run_sync(query, message_history=history)
-        history += result.new_messages()
-        history = history[-3:]  # Keep last 3 messages
-        print(result.data)
-        if active_book:
-            print(f"\n[Active book: {active_book}]")
+            if query.lower().strip() == 'quit':
+                break
+                
+            # Add to command history if not empty
+            if query.strip():
+                cmd_history.append(query)
+                history_index = len(cmd_history)
+            
+            result = gnucash_agent.run_sync(query, message_history=history)
+            history += result.new_messages()
+            history = history[-3:]  # Keep last 3 messages
+            print(result.data)
+            if active_book:
+                print(f"\n[Active book: {active_book}]")
+                
+        except KeyboardInterrupt:
+            # Handle Ctrl+C gracefully
+            print("\nType 'quit' to exit or continue entering commands.")
+            continue
 
 if __name__ == "__main__":
     import argparse
