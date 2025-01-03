@@ -1,0 +1,29 @@
+accounts:
+  # Assets
+  - name: Assets
+    type: ASSET
+    children:
+      - name: Investments
+        children:
+          - name: Stocks
+            children:
+              - name: Broker1
+                initial_balance: 0.00
+                balance_date: "2025-01-01"
+                children:
+                  - name: Growth Portfolio
+                    initial_balance: 0.00
+                    balance_date: "2025-01-01"
+                  - name: Dividend Portfolio
+                    initial_balance: 2000.00
+                    balance_date: "2025-01-01"
+              - name: Broker2
+                initial_balance: 7500.00
+                balance_date: "2025-01-01"
+                children:
+                  - name: Tech Stocks
+                    initial_balance: 4500.00
+                    balance_date: "2025-01-01"
+                  - name: Blue Chips
+                    initial_balance: 3000.00
+                    balance_date: "2025-01-01"
