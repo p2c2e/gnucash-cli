@@ -1,20 +1,18 @@
 import shutil
 import warnings
-import structlog
 from pathlib import Path
-from typing import Union, Optional
-from prompt_toolkit import PromptSession
-from prompt_toolkit.history import FileHistory
-from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-from prompt_toolkit.completion import WordCompleter
-from prompt_toolkit.styles import Style
+from typing import Union
 
+import structlog
 from colorama import Fore, init
 from dotenv import load_dotenv
+from prompt_toolkit import PromptSession
+from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.styles import Style
 from pydantic import BaseModel
 from pydantic_ai import Agent, RunContext
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer
 
 init(autoreset=True)  # Auto reset colors after each print
 from datetime import date, timedelta
@@ -1270,6 +1268,176 @@ async def save_as_template(ctx: RunContext[GnuCashQuery], template_name: str) ->
         return f"Error creating template: {str(e)}"
 
 @gnucash_agent.tool
+async def add_stock_transaction(
+    ctx: RunContext[GnuCashQuery],
+    stock_symbol: str,
+    transaction_date: str,
+    units: float,
+    price: float,
+    commission: float = 0.0,
+    cash_account: str = None,
+    stock_account: str = "Assets:Investments:Stocks"
+) -> str:
+    """Add a stock purchase or sale transaction.
+    
+    Creates a double-entry transaction with:
+    - For purchases: Debit stock account, credit cash account
+    - For sales: Debit cash account, credit stock account
+    - Includes commission as an expense
+    
+    Args:
+        stock_symbol (str): Stock ticker symbol (e.g. AAPL)
+        transaction_date (str): Date in YYYY-MM-DD format
+        units (float): Number of units (+ for buy, - for sell)
+        price (float): Price per unit
+        commission (float, optional): Commission/fees amount
+        cash_account (str): Full name of cash account (default: Assets:Bank:Checking)
+        stock_account (str): Full name of stock account (default: Assets:Investments:Stocks)
+        
+    Returns - str: Success message or error details
+    
+    Raises:
+        ValueError: If accounts don't exist or amounts are invalid
+        piecash.BookError: If transaction creation fails
+    """
+    global active_book
+    if not active_book:
+        return "No active book. Please create or open a book first."
+    
+    try:
+        print(Fore.YELLOW + f"DEBUG: Starting stock transaction for {stock_symbol}")
+        print(Fore.YELLOW + f"DEBUG: Inputs - units: {units}, price: {price}, commission: {commission}")
+        
+        # Convert inputs
+        print(Fore.YELLOW + f"DEBUG: Parsing transaction date: {transaction_date}")
+        transaction_date = datetime.strptime(transaction_date, '%Y-%m-%d').date()
+        print(Fore.YELLOW + f"DEBUG: Parsed date: {transaction_date}")
+        
+        total_amount = abs(units) * price
+        is_purchase = units > 0
+        print(Fore.YELLOW + f"DEBUG: Calculated total amount: {total_amount}, is_purchase: {is_purchase}")
+        
+        print(Fore.YELLOW + f"DEBUG: Opening book: {active_book}")
+        book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
+        print(Fore.YELLOW + "DEBUG: Book opened successfully")
+        
+        # Find the stock account
+        print(Fore.YELLOW + f"DEBUG: Looking for stock account: {stock_account}")
+        stock_acc = book.accounts.get(fullname=stock_account)
+        if not stock_acc:
+            print(Fore.RED + f"DEBUG: Stock account not found: {stock_account}")
+            book.close()
+            return f"Stock account '{stock_account}' not found."
+        print(Fore.YELLOW + f"DEBUG: Found stock account: {stock_acc.fullname}")
+            
+        # If cash account not specified, use stock account's parent
+        if cash_account is None:
+            print(Fore.YELLOW + "DEBUG: No cash account specified, using stock account's parent")
+            if not stock_acc.parent:
+                print(Fore.RED + f"DEBUG: Stock account has no parent: {stock_acc.fullname}")
+                book.close()
+                return f"Stock account '{stock_account}' has no parent account to use as default cash account"
+            cash_acc = stock_acc.parent
+            print(Fore.YELLOW + f"DEBUG: Using parent account as cash account: {cash_acc.fullname}")
+        else:
+            print(Fore.YELLOW + f"DEBUG: Looking for specified cash account: {cash_account}")
+            cash_acc = book.accounts.get(fullname=cash_account)
+            if not cash_acc:
+                print(Fore.RED + f"DEBUG: Cash account not found: {cash_account}")
+                book.close()
+                return f"Cash account '{cash_account}' not found."
+            print(Fore.YELLOW + f"DEBUG: Found cash account: {cash_acc.fullname}")
+        
+        # Create the transaction
+        print(Fore.YELLOW + "DEBUG: Creating transaction splits")
+        with book:
+            splits = []
+            
+            if is_purchase:
+                print(Fore.YELLOW + "DEBUG: Creating purchase transaction")
+                stock_split = Split(
+                    account=stock_acc,
+                    value=Decimal(total_amount + commission),
+                    memo=f"Buy {abs(units)} {stock_symbol} @ {price}"
+                )
+                print(Fore.YELLOW + f"DEBUG: Created stock split: {stock_split}")
+                splits.append(stock_split)
+                
+                cash_split = Split(
+                    account=cash_acc,
+                    value=Decimal(-(total_amount + commission))
+                )
+                print(Fore.YELLOW + f"DEBUG: Created cash split: {cash_split}")
+                splits.append(cash_split)
+            else:
+                print(Fore.YELLOW + "DEBUG: Creating sale transaction")
+                cash_split = Split(
+                    account=cash_acc,
+                    value=Decimal(total_amount - commission),
+                    memo=f"Sell {abs(units)} {stock_symbol} @ {price}"
+                )
+                print(Fore.YELLOW + f"DEBUG: Created cash split: {cash_split}")
+                splits.append(cash_split)
+                
+                stock_split = Split(
+                    account=stock_acc,
+                    value=Decimal(-(total_amount - commission))
+                )
+                print(Fore.YELLOW + f"DEBUG: Created stock split: {stock_split}")
+                splits.append(stock_split)
+            
+            if commission > 0:
+                print(Fore.YELLOW + f"DEBUG: Adding commission split: {commission}")
+                # Add commission as expense
+                commission_acc = book.accounts.get(fullname="Expenses:Commissions")
+                if not commission_acc:
+                    print(Fore.YELLOW + "DEBUG: Creating new Commissions account")
+                    commission_acc = Account(
+                        name="Commissions",
+                        type="EXPENSE",
+                        commodity=book.default_currency,
+                        parent=book.accounts.get(fullname="Expenses"),
+                        description="Trading commissions and fees"
+                    )
+                    print(Fore.YELLOW + f"DEBUG: Created commission account: {commission_acc.fullname}")
+                
+                commission_split = Split(
+                    account=commission_acc,
+                    value=Decimal(commission),
+                    memo=f"{stock_symbol} trade commission"
+                )
+                print(Fore.YELLOW + f"DEBUG: Created commission split: {commission_split}")
+                splits.append(commission_split)
+            
+            print(Fore.YELLOW + "DEBUG: Creating transaction object")
+            transaction = Transaction(
+                currency=book.default_currency,
+                description=f"{'Buy' if is_purchase else 'Sell'} {abs(units)} {stock_symbol} @ {price}",
+                splits=splits,
+                post_date=transaction_date,
+                enter_date=datetime.now(),
+            )
+            print(Fore.YELLOW + f"DEBUG: Created transaction: {transaction}")
+            
+            print(Fore.YELLOW + "DEBUG: Saving book")
+            book.save()
+            print(Fore.YELLOW + "DEBUG: Book saved successfully")
+        
+        print(Fore.YELLOW + "DEBUG: Closing book")
+        book.close()
+        print(Fore.YELLOW + "DEBUG: Book closed successfully")
+        
+        action = "purchased" if is_purchase else "sold"
+        result = (f"Successfully {action} {abs(units)} shares of {stock_symbol} "
+                 f"at {price} on {transaction_date} for total {total_amount:.2f} "
+                 f"(commission: {commission:.2f})")
+        print(Fore.YELLOW + f"DEBUG: Transaction complete. Result: {result}")
+        return result
+    
+    except Exception as e:
+        return f"Error adding stock transaction: {str(e)}"
+
+@gnucash_agent.tool
 async def search_accounts(ctx: RunContext[GnuCashQuery], pattern: str) -> str:
     """Search for accounts matching a name pattern (supports regex).
     
@@ -1771,7 +1939,7 @@ async def run_cli(book_name: str = None):
             
             result = await gnucash_agent.run(query, message_history=history)
             history += result.new_messages()
-            history = history[-3:]  # Keep last 3 messages
+            history = history[-5:]  # Keep last 5 messages
             print(result.data)
             if active_book:
                 print(f"\n[Active book: {active_book}]")
