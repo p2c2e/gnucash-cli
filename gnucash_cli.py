@@ -1,8 +1,12 @@
-import readline
 import shutil
 import warnings
 from pathlib import Path
 from typing import Union, Optional
+from prompt_toolkit import PromptSession
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.styles import Style
 
 from colorama import Fore, init
 from dotenv import load_dotenv
@@ -1561,7 +1565,7 @@ async def generate_reports(ctx: RunContext[GnuCashQuery]) -> str:
         return f"Error generating reports: {str(e)}"
 
 
-def run_cli(book_name: str = None):
+async def run_cli(book_name: str = None):
     """Run the GnuCash CLI interface.
     
     Args:
@@ -1579,40 +1583,24 @@ def run_cli(book_name: str = None):
     # Perform initial sweep immediately
     event_handler.sweep_old_backups()
     
-    # Configure readline for command history and editing
-    readline.parse_and_bind('tab: complete')  # Enable tab completion
-    # readline.set_startup_hook(lambda: readline.insert_text("Hello "))
-
-    # Set up history file
+    # Set up prompt session with history and auto-completion
     histfile = os.path.join(os.path.expanduser("~"), ".gnucash_history")
-    try:
-        readline.read_history_file(histfile)
-    except FileNotFoundError:
-        # Create history file if it doesn't exist
-        with open(histfile, 'w') as f:
-            pass
-        os.chmod(histfile, 0o600)  # Secure the history file
-        
-    # Set history length and make sure it's saved after each command
-    readline.set_history_length(1000)
-    readline.set_auto_history(True)
     
-    # Basic editing bindings
-    readline.parse_and_bind('"\C-a": beginning-of-line')
-    readline.parse_and_bind('"\C-e": end-of-line')
-    readline.parse_and_bind('"\C-k": kill-line')
-    readline.parse_and_bind('"\C-u": unix-line-discard')
-    readline.parse_and_bind('"\C-w": unix-word-rubout')
-    readline.parse_and_bind('"\C-h": backward-delete-char')
-    readline.parse_and_bind('"\C-?": backward-delete-char')
+    # Create command completer
+    gnucash_completer = WordCompleter([
+        'create_book', 'create_accounts', 'generate_reports', 'close_book',
+        'purge_backups', 'save_template', 'set_currency', 'get_currency',
+        'set_accounts_currency', 'search_accounts', 'help', 'quit'
+    ])
     
-    # Navigation bindings
-    readline.parse_and_bind('"\e[A": previous-history')
-    readline.parse_and_bind('"\e[B": next-history')
-    readline.parse_and_bind('"\e[C": forward-char')
-    readline.parse_and_bind('"\e[D": backward-char')
-    readline.parse_and_bind('"\e[1;5C": forward-word')
-    readline.parse_and_bind('"\e[1;5D": backward-word')
+    # Initialize prompt session
+    session = PromptSession(
+        history=FileHistory(histfile),
+        auto_suggest=AutoSuggestFromHistory(),
+        completer=gnucash_completer,
+        enable_history_search=True,
+        complete_while_typing=True
+    )
     
     print(Fore.YELLOW + "Starting GnuCash CLI...")
     commands = {
@@ -1635,7 +1623,7 @@ def run_cli(book_name: str = None):
     
     # Try to open book if provided
     if book_name:
-        result = gnucash_agent.run_sync(f"open_book {book_name}", message_history=history)
+        result = await gnucash_agent.run(f"open_book {book_name}", message_history=history)
         history += result.new_messages()
         history = history[-3:]
         print(result.data)
@@ -1649,31 +1637,24 @@ def run_cli(book_name: str = None):
     else:
         print("No active book - create or open one to begin")
 
-    def clear_line():
-        readline.set_startup_hook(lambda: readline.insert_text(""))  # Clear current input buffer
-        readline.redisplay()
-        print("Clearline called ......")
-
     while True:
         try:
-            # Read input with history support
-            prompt = Fore.GREEN + "GnuCash> "
-            try:
-                # Clear the line before reading input
-                # print('\r' + ' ' * (len(prompt) + 100) + '\r', end='')  # Clear any leftover chars
-                clear_line()
-                query = input(prompt).strip()
+            # Use prompt_toolkit to get input with styling
+            query = session.prompt(
+                "GnuCash> ",
+                mouse_support=True,
+                style=Style.from_dict({
+                    'prompt': 'ansidarkgreen',
+                })
+            ).strip()
+            
+            if query.lower() == 'quit':
+                break
                 
-                if query.lower() == 'quit':
-                    break
-                    
-                # Add to command history if not empty
-                if query:
-                    readline.add_history(query)
-            except EOFError:
+            if not query:
                 continue
             
-            result = gnucash_agent.run_sync(query, message_history=history)
+            result = await gnucash_agent.run(query, message_history=history)
             history += result.new_messages()
             history = history[-3:]  # Keep last 3 messages
             print(result.data)
@@ -1687,20 +1668,28 @@ def run_cli(book_name: str = None):
         except Exception as e:
             print(f"Error: {str(e)}")
     
-    # Save history on exit
-    try:
-        readline.write_history_file(histfile)
-    except Exception as e:
-        print(f"Error saving history: {str(e)}")
-    
     # Stop the watchdog observer
     observer.stop()
     observer.join()
 
 if __name__ == "__main__":
     import argparse
+    import asyncio
+    import nest_asyncio
+    
+    # Apply nest_asyncio to allow running async code in Jupyter/IPython
+    nest_asyncio.apply()
+    
     parser = argparse.ArgumentParser(description='GnuCash CLI')
     parser.add_argument('--book', type=str, help='Name of GnuCash book to open')
     args = parser.parse_args()
     
-    run_cli(args.book)
+    # Get or create an event loop
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    # Run the CLI
+    loop.run_until_complete(run_cli(args.book))
