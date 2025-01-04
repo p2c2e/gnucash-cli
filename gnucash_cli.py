@@ -1,3 +1,4 @@
+import readline
 import warnings
 from typing import Union, Optional
 
@@ -1342,6 +1343,15 @@ def run_cli(book_name: str = None):
     Args:
         book_name (str, optional): Name of book to open at startup
     """
+    # Configure readline for command history and editing
+    readline.parse_and_bind('bind ^I rl_complete')  # Enable tab completion
+    readline.parse_and_bind('bind ^P ed-search-prev-history')  # Ctrl-P for previous
+    readline.parse_and_bind('bind ^N ed-search-next-history')  # Ctrl-N for next
+    readline.parse_and_bind('bind "\e[A" previous-history')  # Up arrow
+    readline.parse_and_bind('bind "\e[B" next-history')      # Down arrow
+    readline.parse_and_bind('bind "\e[C" forward-char')      # Right arrow
+    readline.parse_and_bind('bind "\e[D" backward-char')     # Left arrow
+    
     print(Fore.YELLOW + "Starting GnuCash CLI...")
     commands = {
         'create_book': 'Create a new sample GnuCash book',
@@ -1381,6 +1391,8 @@ def run_cli(book_name: str = None):
         try:
             # Read input with history support
             query = input(Fore.GREEN + "GnuCash> ")
+            if query.strip():  # Only add non-empty commands to history
+                readline.add_history(query)
             
             if query.lower().strip() == 'quit':
                 break
