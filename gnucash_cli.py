@@ -1560,27 +1560,41 @@ async def export_reports_pdf(ctx: RunContext[GnuCashQuery], output_file: str = "
     except Exception as e:
         return f"Error exporting reports to PDF: {str(e)}"
 
-class BackupFileHandler(FileSystemEventHandler):
-    """Handler for managing GnuCash backup files."""
+class BackupScheduler:
+    """Periodic scheduler for managing GnuCash backup files."""
     
     def __init__(self, sweep_interval: int = 120, sweep_age: int = 5):
         self.sweep_interval = sweep_interval
         self.sweep_age = sweep_age
         self.purge_days = int(os.getenv('GC_CLI_PURGE_DAYS', '2'))
-        self.last_sweep = datetime.now()
+        self._sweep_task = None
         # Create backups directory if it doesn't exist
         Path('backups').mkdir(exist_ok=True)
         
-    def on_created(self, event):
-        """Handle new file creation."""
-        if event.is_directory:
-            return
+    async def start(self):
+        """Start the periodic sweep task."""
+        self._sweep_task = asyncio.create_task(self._run_periodic_sweep())
+        
+    async def stop(self):
+        """Stop the periodic sweep task."""
+        if self._sweep_task:
+            self._sweep_task.cancel()
+            try:
+                await self._sweep_task
+            except asyncio.CancelledError:
+                pass
             
-        # Check if it's time for a sweep
-        now = datetime.now()
-        if (now - self.last_sweep).total_seconds() >= self.sweep_interval:
-            self.sweep_old_backups()
-            self.last_sweep = now
+    async def _run_periodic_sweep(self):
+        """Run the sweep task periodically."""
+        while True:
+            try:
+                self.sweep_old_backups()
+                await asyncio.sleep(self.sweep_interval)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log.error("sweep_error", error=str(e))
+                await asyncio.sleep(60)  # Wait before retrying after error
     
     def sweep_old_backups(self):
         """Move backup files older than sweep_age minutes to backups folder and delete very old backups."""
@@ -1669,20 +1683,18 @@ async def run_cli(book_name: str = None):
     Args:
         book_name (str, optional): Name of book to open at startup
     """
-    # Set up backup file monitoring
+    # Set up periodic backup sweeper
     sweep_interval = int(os.getenv('GC_CLI_SWEEP_SECS', '120'))
     sweep_age = int(os.getenv('GC_CLI_SWEEP_AGE_MINS', '5'))
-    event_handler = BackupFileHandler(sweep_interval, sweep_age)
-    observer = Observer()
-    observer.schedule(event_handler, '.', recursive=False)
-    observer.start()
-    log.info("backup_monitoring_started", 
+    backup_scheduler = BackupScheduler(sweep_interval, sweep_age)
+    await backup_scheduler.start()
+    log.info("backup_scheduler_started", 
              sweep_interval_seconds=sweep_interval,
              sweep_age_minutes=sweep_age,
-             purge_days=event_handler.purge_days)
+             purge_days=backup_scheduler.purge_days)
     
     # Perform initial sweep immediately
-    event_handler.sweep_old_backups()
+    backup_scheduler.sweep_old_backups()
     
     # Set up prompt session with history and auto-completion
     histfile = os.path.join(os.path.expanduser("~"), ".gnucash_history")
@@ -1771,9 +1783,8 @@ async def run_cli(book_name: str = None):
         except Exception as e:
             print(f"Error: {str(e)}")
     
-    # Stop the watchdog observer
-    observer.stop()
-    observer.join()
+    # Stop the backup scheduler
+    await backup_scheduler.stop()
 
 if __name__ == "__main__":
     import argparse
