@@ -66,18 +66,24 @@ class GnuCashQuery(BaseModel):
 active_book = None
 
 # Create the GnuCash agent
+system_prompt = (
+    f"Today is {date.today().strftime('%d-%b-%Y')}\n"
+    "You are a helpful AI assistant specialized in GnuCash accounting. "
+    "You can help users create books, generate reports, and manage transactions. "
+    "Always use proper accounting terminology and double-entry principles."
+    f"\n{os.getenv('GC_CLI_SYSTEM_PROMPT', '')}"
+)
+
 gnucash_agent = Agent(
     'openai:gpt-4o-mini',
     # deps_type=Optional[GnuCashQuery], # type: ignore
     # result_type=str,  # type: ignore
-    system_prompt=(
-        f"Today is {date.today().strftime('%d-%b-%Y')}\n"
-        "You are a helpful AI assistant specialized in GnuCash accounting. "
-        "You can help users create books, generate reports, and manage transactions. "
-        "Always use proper accounting terminology and double-entry principles."
-    ),
+    system_prompt=system_prompt,
     retries=3,
 )
+
+# Log the system prompt for reference
+log.info("agent_created", system_prompt=system_prompt)
 
 @gnucash_agent.tool
 async def create_book(ctx: RunContext[GnuCashQuery], book_name: str = "sample_accounts") -> str:
@@ -1275,14 +1281,14 @@ async def add_stock_transaction(
     units: float,
     price: float,
     commission: float = 0.0,
-    cash_account: str = None,
+    credit_account: str = None,
     stock_account: str = "Assets:Investments:Stocks"
 ) -> str:
     """Add a stock purchase or sale transaction.
     
     Creates a double-entry transaction with:
-    - For purchases: Debit stock account, credit cash account
-    - For sales: Debit cash account, credit stock account
+    - For purchases: Debit stock account, credit the specified account
+    - For sales: Debit the specified account, credit stock account
     - Includes commission as an expense
     
     Args:
@@ -1291,7 +1297,7 @@ async def add_stock_transaction(
         units (float): Number of units (+ for buy, - for sell)
         price (float): Price per unit
         commission (float, optional): Commission/fees amount
-        cash_account (str): Full name of cash account (default: Assets:Bank:Checking)
+        credit_account (str): Full name of account to credit/debit (this not provided, it will be inferred as the stocks parent account)
         stock_account (str): Full name of stock account (default: Assets:Investments:Stocks)
         
     Returns - str: Success message or error details
@@ -1330,23 +1336,23 @@ async def add_stock_transaction(
             return f"Stock account '{stock_account}' not found."
         print(Fore.YELLOW + f"DEBUG: Found stock account: {stock_acc.fullname}")
             
-        # If cash account not specified, use stock account's parent
-        if cash_account is None:
-            print(Fore.YELLOW + "DEBUG: No cash account specified, using stock account's parent")
+        # If credit account not specified, use stock account's parent
+        if credit_account is None:
+            print(Fore.YELLOW + "DEBUG: No credit account specified, using stock account's parent")
             if not stock_acc.parent:
                 print(Fore.RED + f"DEBUG: Stock account has no parent: {stock_acc.fullname}")
                 book.close()
-                return f"Stock account '{stock_account}' has no parent account to use as default cash account"
-            cash_acc = stock_acc.parent
-            print(Fore.YELLOW + f"DEBUG: Using parent account as cash account: {cash_acc.fullname}")
+                return f"Stock account '{stock_account}' has no parent account to use as default credit account"
+            credit_acc = stock_acc.parent
+            print(Fore.YELLOW + f"DEBUG: Using parent account as credit account: {credit_acc.fullname}")
         else:
-            print(Fore.YELLOW + f"DEBUG: Looking for specified cash account: {cash_account}")
-            cash_acc = book.accounts.get(fullname=cash_account)
-            if not cash_acc:
-                print(Fore.RED + f"DEBUG: Cash account not found: {cash_account}")
+            print(Fore.YELLOW + f"DEBUG: Looking for specified credit account: {credit_account}")
+            credit_acc = book.accounts.get(fullname=credit_account)
+            if not credit_acc:
+                print(Fore.RED + f"DEBUG: Credit account not found: {credit_account}")
                 book.close()
-                return f"Cash account '{cash_account}' not found."
-            print(Fore.YELLOW + f"DEBUG: Found cash account: {cash_acc.fullname}")
+                return f"Credit account '{credit_account}' not found."
+            print(Fore.YELLOW + f"DEBUG: Found credit account: {credit_acc.fullname}")
         
         # Create the transaction
         print(Fore.YELLOW + "DEBUG: Creating transaction splits")
@@ -1363,21 +1369,21 @@ async def add_stock_transaction(
                 print(Fore.YELLOW + f"DEBUG: Created stock split: {stock_split}")
                 splits.append(stock_split)
                 
-                cash_split = Split(
-                    account=cash_acc,
+                credit_split = Split(
+                    account=credit_acc,
                     value=Decimal(-(total_amount + commission))
                 )
-                print(Fore.YELLOW + f"DEBUG: Created cash split: {cash_split}")
-                splits.append(cash_split)
+                print(Fore.YELLOW + f"DEBUG: Created credit split: {credit_split}")
+                splits.append(credit_split)
             else:
                 print(Fore.YELLOW + "DEBUG: Creating sale transaction")
-                cash_split = Split(
-                    account=cash_acc,
+                credit_split = Split(
+                    account=credit_acc,
                     value=Decimal(total_amount - commission),
                     memo=f"Sell {abs(units)} {stock_symbol} @ {price}"
                 )
-                print(Fore.YELLOW + f"DEBUG: Created cash split: {cash_split}")
-                splits.append(cash_split)
+                print(Fore.YELLOW + f"DEBUG: Created credit split: {credit_split}")
+                splits.append(credit_split)
                 
                 stock_split = Split(
                     account=stock_acc,
