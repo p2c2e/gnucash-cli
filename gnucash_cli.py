@@ -48,8 +48,8 @@ active_book = None
 # Create the GnuCash agent
 gnucash_agent = Agent(
     'openai:gpt-4o-mini',
-    deps_type=Optional[GnuCashQuery], # type: ignore
-    result_type=str,  # type: ignore
+    # deps_type=Optional[GnuCashQuery], # type: ignore
+    # result_type=str,  # type: ignore
     system_prompt=(
         f"Today is {date.today().strftime('%d-%b-%Y')}\n"
         "You are a helpful AI assistant specialized in GnuCash accounting. "
@@ -1357,7 +1357,7 @@ async def export_reports_pdf(ctx: RunContext[GnuCashQuery], output_file: str = "
         elements = []
         
         # Add title
-        elements.append(Paragraph(f"Financial Reports - {active_book}", title_style))
+        elements.append(Paragraph(f"Financial Reports (CURRENTLY BROKEN) - {active_book}", title_style))
         elements.append(Spacer(1, 20))
         
         # Helper function to convert DataFrame to PDF table
