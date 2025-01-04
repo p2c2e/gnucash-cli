@@ -1485,6 +1485,7 @@ class BackupFileHandler(FileSystemEventHandler):
     def __init__(self, sweep_interval: int = 120, sweep_age: int = 5):
         self.sweep_interval = sweep_interval
         self.sweep_age = sweep_age
+        self.purge_days = int(os.getenv('GC_CLI_PURGE_DAYS', '2'))
         self.last_sweep = datetime.now()
         # Create backups directory if it doesn't exist
         Path('backups').mkdir(exist_ok=True)
@@ -1501,11 +1502,12 @@ class BackupFileHandler(FileSystemEventHandler):
             self.last_sweep = now
     
     def sweep_old_backups(self):
-        """Move backup files older than sweep_age minutes to backups folder."""
+        """Move backup files older than sweep_age minutes to backups folder and delete very old backups."""
         print(Fore.YELLOW + "DEBUG: Sweeping for old backup files...")
-        cutoff = datetime.now() - timedelta(minutes=self.sweep_age)
+        move_cutoff = datetime.now() - timedelta(minutes=self.sweep_age)
+        delete_cutoff = datetime.now() - timedelta(days=self.purge_days)
         
-        # Look for backup files in current directory
+        # Look for backup files in current directory to move to backups/
         for filepath in Path('.').glob('*.*.gnucash'):
             try:
                 # Parse timestamp from filename
@@ -1516,11 +1518,25 @@ class BackupFileHandler(FileSystemEventHandler):
                 else:
                     continue  # Skip files that don't match the expected format
                 
-                if file_time < cutoff:
+                if file_time < move_cutoff:
                     # Move file to backups folder
                     dest = Path('backups') / filepath.name
                     print(Fore.YELLOW + f"DEBUG: Moving old backup {filepath} to {dest}")
                     shutil.move(str(filepath), str(dest))
+            except (ValueError, IndexError) as e:
+                print(Fore.RED + f"Error processing backup file {filepath}: {e}")
+        
+        # Delete files older than 2 days from backups folder
+        for filepath in Path('backups').glob('*.*.gnucash'):
+            try:
+                parts = filepath.name.split('.')
+                if len(parts) >= 3 and len(parts[-2]) == 14 and parts[-2].isdigit():
+                    timestamp_str = parts[-2]
+                    file_time = datetime.strptime(timestamp_str, '%Y%m%d%H%M%S')
+                    
+                    if file_time < delete_cutoff:
+                        print(Fore.YELLOW + f"DEBUG: Deleting old backup {filepath}")
+                        filepath.unlink()
             except (ValueError, IndexError) as e:
                 print(Fore.RED + f"Error processing backup file {filepath}: {e}")
 
@@ -1572,12 +1588,12 @@ async def run_cli(book_name: str = None):
     """
     # Set up backup file monitoring
     sweep_interval = int(os.getenv('GC_CLI_SWEEP_SECS', '120'))
-    sweep_age = int(os.getenv('GC_CLI_SWEEP_AGE', '5'))
+    sweep_age = int(os.getenv('GC_CLI_SWEEP_AGE_MINS', '5'))
     event_handler = BackupFileHandler(sweep_interval, sweep_age)
     observer = Observer()
     observer.schedule(event_handler, '.', recursive=False)
     observer.start()
-    print(Fore.YELLOW + f"Started backup file monitoring (sweep interval: {sweep_interval}s, sweep age: {sweep_age}m)")
+    print(Fore.YELLOW + f"Started backup file monitoring (sweep interval: {sweep_interval}s, sweep age: {sweep_age}m, purge after: {event_handler.purge_days}d)")
     
     # Perform initial sweep immediately
     event_handler.sweep_old_backups()
