@@ -23,6 +23,9 @@ import sqlalchemy as sa
 load_dotenv(verbose=True)
 warnings.filterwarnings('ignore', category=sa.exc.SAWarning)
 
+# Get default currency from environment or use INR
+DEFAULT_CURRENCY = os.getenv('GC_CLI_DEFAULT_CURRENCY', 'INR')
+
 class GnuCashQuery(BaseModel):
     query: str
     results: list[str]
@@ -77,7 +80,7 @@ async def create_book(ctx: RunContext[GnuCashQuery], book_name: str = "sample_ac
         book = piecash.create_book(
             f"{book_name}.gnucash",
             overwrite=True,
-            currency="USD",
+            currency=DEFAULT_CURRENCY,
             keep_foreign_keys=False
         )
         print(Fore.YELLOW + f"Book created successfully: {active_book}")
