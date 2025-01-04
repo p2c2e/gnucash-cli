@@ -1313,6 +1313,65 @@ async def search_accounts(ctx: RunContext[GnuCashQuery], pattern: str) -> str:
         return f"Error searching accounts: {str(e)}"
 
 @gnucash_agent.tool
+async def move_account(ctx: RunContext[GnuCashQuery], account_name: str, new_parent_name: str) -> str:
+    """Move an account to a new parent account.
+    
+    Verifies account type compatibility before moving:
+    - ASSET accounts can only be under ASSET parents
+    - LIABILITY accounts can only be under LIABILITY parents
+    - INCOME accounts can only be under INCOME parents
+    - EXPENSE accounts can only be under EXPENSE parents
+    - EQUITY accounts can only be under EQUITY parents
+    
+    Args:
+        account_name (str): Full name of account to move
+        new_parent_name (str): Full name of new parent account
+        
+    Returns - str: Success message or error details
+    
+    Raises:
+        ValueError: If accounts don't exist or types are incompatible
+        piecash.BookError: If move operation fails
+    """
+    global active_book
+    if not active_book:
+        return "No active book. Please create or open a book first."
+    
+    try:
+        book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
+        
+        # Find the accounts
+        account = book.accounts.get(fullname=account_name)
+        new_parent = book.accounts.get(fullname=new_parent_name)
+        
+        if not account:
+            book.close()
+            return f"Account '{account_name}' not found."
+        if not new_parent:
+            book.close()
+            return f"New parent account '{new_parent_name}' not found."
+            
+        # Check type compatibility
+        if account.type != "ROOT" and new_parent.type != "ROOT":
+            if account.type != new_parent.type:
+                book.close()
+                return f"Cannot move {account.type} account under {new_parent.type} parent."
+        
+        # Store old parent name for message
+        old_parent_name = account.parent.fullname if account.parent else "ROOT"
+        
+        # Perform the move
+        with book:
+            account.parent = new_parent
+            book.save()
+        
+        book.close()
+        print(Fore.YELLOW + f"DEBUG: Moved account {account_name} from {old_parent_name} to {new_parent_name}")
+        return f"Successfully moved account '{account_name}' from '{old_parent_name}' to '{new_parent_name}'"
+        
+    except Exception as e:
+        return f"Error moving account: {str(e)}"
+
 async def export_reports_pdf(ctx: RunContext[GnuCashQuery], output_file: str = "gnucash_reports.pdf") -> str:
     """Export all financial reports to a single PDF file.
     
@@ -1630,6 +1689,7 @@ async def run_cli(book_name: str = None):
         'get_currency': 'Get current default currency',
         'set_accounts_currency': 'Set currency for all accounts (USD, EUR, etc)',
         'search_accounts': 'Search accounts by name pattern (supports regex)',
+        'move_account': 'Move account to new parent (account_name new_parent_name)',
         'help': 'Show this help message'
     }
     global active_book
