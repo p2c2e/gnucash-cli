@@ -17,6 +17,7 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "pyyaml>=6.0.2",
     "reportlab>=4.2.5",
+    "structlog>=24.4.0",
     "uvicorn>=0.34.0",
     "watchdog>=6.0.0",
 ]

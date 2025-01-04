@@ -1,5 +1,6 @@
 import shutil
 import warnings
+import structlog
 from pathlib import Path
 from typing import Union, Optional
 from prompt_toolkit import PromptSession
@@ -31,12 +32,33 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 
+# Configure structlog with minimum level
+structlog.configure(
+    processors=[
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.add_log_level,
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+        structlog.processors.JSONRenderer()
+    ],
+    wrapper_class=structlog.make_filtering_bound_logger(20),  # INFO = 20
+    context_class=dict,
+    logger_factory=structlog.WriteLoggerFactory(
+        file=open("gnucash.log", "a")
+    ),
+    cache_logger_on_first_use=True
+)
+
+# Create logger instance
+log = structlog.get_logger()
+
 # Load environment variables and filter warnings
 load_dotenv(verbose=True)
 warnings.filterwarnings('ignore', category=sa.exc.SAWarning)
 
 # Get default currency from environment or use INR
 DEFAULT_CURRENCY = os.getenv('GC_CLI_DEFAULT_CURRENCY', 'INR')
+log.info("initialized_app", default_currency=DEFAULT_CURRENCY)
 
 class GnuCashQuery(BaseModel):
     query: str
@@ -87,7 +109,7 @@ async def create_book(ctx: RunContext[GnuCashQuery], book_name: str = "sample_ac
     """
     global active_book
     try:
-        print(Fore.YELLOW + f"Attempting to create book: {book_name}.gnucash")
+        log.info("creating_book", book_name=f"{book_name}.gnucash")
         active_book = f"{book_name}.gnucash"
         book = piecash.create_book(
             f"{book_name}.gnucash",
@@ -95,7 +117,7 @@ async def create_book(ctx: RunContext[GnuCashQuery], book_name: str = "sample_ac
             currency=DEFAULT_CURRENCY,
             keep_foreign_keys=False
         )
-        print(Fore.YELLOW + f"Book created successfully: {active_book}")
+        log.info("book_created", book_name=active_book)
         
         with book:
             # Create main account categories
@@ -1562,7 +1584,9 @@ class BackupFileHandler(FileSystemEventHandler):
     
     def sweep_old_backups(self):
         """Move backup files older than sweep_age minutes to backups folder and delete very old backups."""
-        print(Fore.YELLOW + "DEBUG: Sweeping for old backup files...")
+        log.info("starting_backup_sweep", 
+                sweep_age_minutes=self.sweep_age,
+                purge_days=self.purge_days)
         move_cutoff = datetime.now() - timedelta(minutes=self.sweep_age)
         delete_cutoff = datetime.now() - timedelta(days=self.purge_days)
         
@@ -1580,10 +1604,10 @@ class BackupFileHandler(FileSystemEventHandler):
                 if file_time < move_cutoff:
                     # Move file to backups folder
                     dest = Path('backups') / filepath.name
-                    print(Fore.YELLOW + f"DEBUG: Moving old backup {filepath} to {dest}")
+                    log.info("moving_backup", source=str(filepath), destination=str(dest))
                     shutil.move(str(filepath), str(dest))
             except (ValueError, IndexError) as e:
-                print(Fore.RED + f"Error processing backup file {filepath}: {e}")
+                log.error("backup_processing_error", filepath=str(filepath), error=str(e))
         
         # Delete files older than 2 days from backups folder
         for filepath in Path('backups').glob('*.*.gnucash'):
@@ -1652,7 +1676,10 @@ async def run_cli(book_name: str = None):
     observer = Observer()
     observer.schedule(event_handler, '.', recursive=False)
     observer.start()
-    print(Fore.YELLOW + f"Started backup file monitoring (sweep interval: {sweep_interval}s, sweep age: {sweep_age}m, purge after: {event_handler.purge_days}d)")
+    log.info("backup_monitoring_started", 
+             sweep_interval_seconds=sweep_interval,
+             sweep_age_minutes=sweep_age,
+             purge_days=event_handler.purge_days)
     
     # Perform initial sweep immediately
     event_handler.sweep_old_backups()
