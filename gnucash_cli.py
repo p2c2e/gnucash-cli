@@ -1388,24 +1388,23 @@ async def export_reports_pdf(ctx: RunContext[GnuCashQuery], output_file: str = "
             elements.append(table)
             elements.append(Spacer(1, 20))
         
-        # Add Balance Sheet in two columns
-        # Get assets and liabilities separately
-        assets_df = pd.DataFrame([
-            {
-                'Account': acc.fullname,
-                'Balance': acc.get_balance()
-            }
-            for acc in book.accounts if acc.type == "ASSET"
-        ])
-        
-        liabilities_df = pd.DataFrame([
-            {
-                'Account': acc.fullname,
-                'Balance': acc.get_balance(),
-                'Description': acc.description
-            }
-            for acc in book.accounts if acc.type == "LIABILITY"
-        ])
+        # Helper function to get leaf accounts and their balances
+        def get_account_balances(acc_types):
+            accounts_data = []
+            for acc in book.accounts:
+                if acc.type in acc_types:
+                    # Only include leaf accounts (those without children)
+                    if not acc.children:
+                        accounts_data.append({
+                            'Account': acc.fullname,
+                            'Balance': acc.get_balance(),
+                            'Description': acc.description or ''
+                        })
+            return pd.DataFrame(accounts_data)
+
+        # Get assets (including bank accounts) and liabilities separately
+        assets_df = get_account_balances(["ASSET", "BANK"])
+        liabilities_df = get_account_balances(["LIABILITY"])
 
         # Add Balance Sheet title
         elements.append(Paragraph("Balance Sheet", styles['Heading2']))
@@ -1592,14 +1591,16 @@ async def run_cli(book_name: str = None):
         'purge_backups', 'save_template', 'set_currency', 'get_currency',
         'set_accounts_currency', 'search_accounts', 'help', 'quit'
     ])
-    
+
     # Initialize prompt session
     session = PromptSession(
         history=FileHistory(histfile),
         auto_suggest=AutoSuggestFromHistory(),
         completer=gnucash_completer,
         enable_history_search=True,
-        complete_while_typing=True
+        complete_while_typing=True,
+        erase_when_done=True,
+        mouse_support=False,
     )
     
     print(Fore.YELLOW + "Starting GnuCash CLI...")
@@ -1642,7 +1643,7 @@ async def run_cli(book_name: str = None):
             # Use prompt_toolkit to get input with styling
             query = session.prompt(
                 "GnuCash> ",
-                mouse_support=True,
+                mouse_support=False,
                 style=Style.from_dict({
                     'prompt': 'ansidarkgreen',
                 })
