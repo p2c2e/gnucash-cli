@@ -1544,14 +1544,14 @@ async def add_stock_transaction(
                 splits.append(stock_split)
                     
                 # Update the price database
-                print(Fore.YELLOW + f"DEBUG: Updating price database for {stock_symbol}")
-                stock_acc.commodity.update_prices([
-                    {
-                        "datetime": datetime.now(),
-                        "value": Decimal(price),
-                        "currency": book.default_currency
-                    }
-                ])
+                # print(Fore.YELLOW + f"DEBUG: Updating price database for {stock_symbol}")
+                # stock_acc.commodity.update_prices([
+                #     {
+                #         "datetime": datetime.now(),
+                #         "value": price,
+                #         "currency": book.default_currency
+                #     }
+                # ])
             
             if commission > 0:
                 print(Fore.YELLOW + f"DEBUG: Adding commission split: {commission}")
