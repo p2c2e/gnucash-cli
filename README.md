@@ -7,11 +7,16 @@ Uses piecash, pydantic-ai, OpenAI, GenAI / LLMs etc.
 
 - Create and manage GnuCash books
 - Bulk account creation from YAML files
-- Generate financial reports
+- Generate financial reports (PDF and console)
 - Cash flow statement generation
+- Balance sheet generation
 - Currency management
 - Template creation
 - Backup management
+- Account search and movement
+- Transaction management
+- PDF report export
+- Automatic backup management
 
 ## Installation
 
@@ -76,16 +81,23 @@ GnuCash> init from SampleAccounts.yaml
 ```
 ## Available Commands
 
-- `create_book [name]` - Create a new GnuCash book
+- `create_book [name]` - Create a new GnuCash book with sample accounts
 - `open_book [name]` - Open an existing book
-- `create_accounts [file]` - Create accounts from YAML file
+- `create_accounts_from_file [file]` - Create accounts from YAML file
 - `list_accounts` - Show all accounts with balances
 - `transfer_funds [from] [to] [amount]` - Transfer money between accounts
-- `generate_cashflow_statement` - Generate cash flow report
-- `purge_backups [--days N|--before YYYY-MM-DD]` - Clean up old backups
+- `add_transaction [from] [to] [amount]` - Create complex transactions with multiple splits
+- `list_transactions [limit]` - Show recent transactions
+- `generate_cashflow_statement [start_date] [end_date]` - Generate cash flow report
+- `generate_balance_sheet` - Generate balance sheet report
+- `export_reports_pdf [filename]` - Export reports to PDF
+- `purge_backups [book] [--days N|--before YYYY-MM-DD]` - Clean up old backups
 - `save_as_template [name]` - Save book structure as template
 - `set_default_currency [code]` - Change book's default currency
 - `set_accounts_currency [code]` - Update all accounts' currency
+- `search_accounts [pattern]` - Search accounts by name (supports regex)
+- `move_account [account] [new_parent]` - Move account to new parent
+- `get_default_currency` - Show current default currency
 
 ## Cash Flow Statement
 
@@ -123,24 +135,29 @@ GnuCash> create Account BankC under "Current Assets" with balance 15000
 
 ## Managing Transactions
 
-Transfer money between accounts using natural language:
-
+Transfer money between accounts:
 ```
 GnuCash> transfer 1000 from Checking to Savings
 GnuCash> move 50.25 from Assets:Checking to Expenses:Groceries
 GnuCash> pay 750 from Credit Card to Expenses:Rent desc "January rent"
 ```
 
-Split transactions across multiple accounts:
+Complex transactions with multiple splits:
 ```
-GnuCash> split 1500 from Checking to Savings 1000 , Expenses:Groceries 300 and Expenses:Gas 200
+GnuCash> add_transaction from Checking to Savings 1000, Expenses:Groceries 300, Expenses:Gas 200
 ```
 
-Common patterns:
-- Use "transfer", "move", or "pay" 
-- Specify full account paths for clarity
-- Add description with "desc" or "description"
-- Date defaults to today, or specify: "date 2025-01-15"
+View recent transactions:
+```
+GnuCash> list_transactions 20
+```
+
+Transaction features:
+- Double-entry accounting
+- Timestamped with current date/time
+- Multiple splits supported
+- Detailed transaction history
+- Color-coded output
 
 ## Currency Management
 
@@ -156,15 +173,35 @@ GnuCash> set currency for all accounts to EUR
 
 ## Reports
 
-Show Cashflow or Balance sheet
-``` 
-GnuCash> Show cashflow report for 2025
+Generate detailed financial reports:
+
+Cash Flow Statement:
+```
+GnuCash> generate_cashflow_statement
+GnuCash> show cashflow for 2025-01-01 to 2025-12-31
 ```
 
-Show Balance Sheet
-``` 
-GnuCash> Generate Bal Sheet
+Balance Sheet:
 ```
+GnuCash> generate_balance_sheet
+GnuCash> show balance sheet
+```
+
+PDF Export:
+```
+GnuCash> export_reports_pdf my_report.pdf
+```
+
+Transaction History:
+```
+GnuCash> list_transactions 20
+```
+
+All reports include:
+- Proper account hierarchy
+- Roll-up totals
+- Color-coded output
+- Date filtering (where applicable)
 
 ## Templates
 
@@ -180,15 +217,21 @@ This creates a new file without transactions but preserving:
 
 ## Backup Management
 
-Clean up old backup files:
+The CLI automatically manages backups:
+- Creates timestamped backups during operations
+- Moves old backups to backups/ directory
+- Deletes backups older than 2 days by default
+
+Manual backup cleanup:
 ```
 GnuCash> purge_backups mybook --days 30
-```
-
-Or before specific date:
-```
 GnuCash> purge_backups mybook --before 2024-12-31
 ```
+
+Configure backup retention:
+- Set GC_CLI_PURGE_DAYS in .env for backup retention days
+- Set GC_CLI_SWEEP_SECS for backup sweep interval
+- Set GC_CLI_SWEEP_AGE_MINS for backup move age
 
 ## Error Handling
 
