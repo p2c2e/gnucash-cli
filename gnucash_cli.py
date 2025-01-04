@@ -242,6 +242,7 @@ async def list_accounts(ctx: RunContext[GnuCashQuery]) -> str:
     """
     global active_book
     if not active_book:
+        print(Fore.YELLOW + "DEBUG: No active book - returning error")
         return "No active book. Please create or open a book first."
     
     try:
@@ -338,7 +339,7 @@ async def create_subaccount(
     ctx: RunContext[GnuCashQuery],
     parent_account: str,
     account_name: str,
-    account_type: str = "ASSET",
+    account_type: str = None,
     description: str = None,
     initial_balance: float = 0.0
 ) -> str:
@@ -351,7 +352,7 @@ async def create_subaccount(
     Args:
         parent_account (str): Full name of the parent account (must exist)
         account_name (str): Name for the new subaccount (must be unique)
-        account_type (str): Type of account (ASSET, BANK, EXPENSE, etc.)
+        account_type (str): Type of account (ASSET, BANK, EXPENSE, etc.) -Ask the user if it is not mentioned.
         description (str, optional): Description for the new account
         initial_balance (float, optional): Initial balance to set for the account
         
@@ -367,67 +368,153 @@ async def create_subaccount(
         return "No active book. Please create or open a book first."
     
     # Validate account type
-    valid_types = ["ASSET", "BANK", "CREDIT", "EXPENSE", "INCOME", "LIABILITY", "EQUITY"]
-    if account_type.upper() not in valid_types:
-        return f"Invalid account type. Must be one of: {', '.join(valid_types)}"
+    # List of valid GnuCash account types with descriptions
+    valid_types = {
+        "ASSET": "Assets (e.g., Bank Accounts, Investments)",
+        "BANK": "Bank Accounts",
+        "CASH": "Cash Accounts",
+        "CREDIT": "Credit Cards",
+        "EXPENSE": "Expenses",
+        "INCOME": "Income",
+        "LIABILITY": "Liabilities",
+        "EQUITY": "Equity",
+        "TRADING": "Trading Accounts",
+        "STOCK": "Stock/Investment Accounts",
+        "MUTUAL": "Mutual Fund Accounts",
+        "CURRENCY": "Currency Trading Accounts",
+        "RECEIVABLE": "Accounts Receivable",
+        "PAYABLE": "Accounts Payable"
+    }
+    
+    # Normalize and validate account type
+    account_type = account_type.upper()
+    if account_type not in valid_types:
+        valid_types_str = "\n".join(f"- {t}: {d}" for t, d in valid_types.items())
+        print(Fore.YELLOW + f"DEBUG: Invalid account type '{account_type}'. Valid types are:\n{valid_types_str}")
+        return f"Invalid account type. Must be one of:\n{valid_types_str}"
     
     try:
-        print(f"Attempting to open book: {active_book}")
+        print(Fore.YELLOW + f"DEBUG: Attempting to open book: {active_book}")
         book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
-        print(f"Book opened successfully. Read-only mode: {book}")
+        print(Fore.YELLOW + f"DEBUG: Book opened successfully")
         
         # Find the parent account
+        print(Fore.YELLOW + f"DEBUG: Looking for parent account: {parent_account}")
         parent = book.accounts.get(fullname=parent_account)
         if not parent:
+            print(Fore.RED + f"DEBUG: Parent account not found: {parent_account}")
             book.close()
+            print(Fore.YELLOW + f"DEBUG: Parent account '{parent_account}' not found - returning error")
             return f"Parent account '{parent_account}' not found."
+        print(Fore.YELLOW + f"DEBUG: Found parent account: {parent.fullname} (type: {parent.type})")
         
         # Create the subaccount
         with book:
-            new_account = Account(
-                name=account_name,
-                type=account_type.upper(),
-                commodity=book.default_currency,
-                parent=parent,
-                description=description or f"{account_name} account"
-            )
+            print(Fore.YELLOW + f"DEBUG: Starting account creation for {account_name}")
+            
+            # For stock accounts, create with proper commodity
+            if account_type == "STOCK":
+                print(Fore.YELLOW + "DEBUG: Creating stock account")
+                
+                # First ensure the commodity (stock) exists
+                try:
+                    namespace = os.getenv('GC_CLI_COMMODITY_NAMESPACE', 'NSE')
+                    print(Fore.YELLOW + f"DEBUG: Using commodity namespace: {namespace}")
+                    stock_commodity = book.commodities(namespace=namespace, mnemonic=account_name)
+                    print(Fore.YELLOW + f"DEBUG: Found existing stock commodity: {stock_commodity}")
+                except KeyError:
+                    # Create new stock commodity if it doesn't exist
+                    print(Fore.YELLOW + f"DEBUG: Creating new stock commodity for {account_name}")
+                    stock_commodity = piecash.Commodity(
+                        namespace=namespace,  # Use configured namespace for stocks
+                        mnemonic=account_name,
+                        fullname=account_name,
+                        fraction=1000,  # Standard fraction for stocks (must be integer)
+                        cusip=None,
+                        book=book
+                    )
+                    print(Fore.YELLOW + f"DEBUG: Created stock commodity: {stock_commodity}")
+
+                book.save() # Save first - to allow linking of the Commodity to the account
+                print(Fore.YELLOW + f"DEBUG: Creating stock account {account_name}")
+                new_account = Account(
+                    name=account_name,
+                    type="STOCK",
+                    commodity=stock_commodity,
+                    commodity_scu=1000,  # Standard commodity_scu for stocks
+                    parent=parent or book.root_account,
+                    description=description or f"{account_name} stock account",
+                    book=book
+                )
+                print(Fore.YELLOW + f"DEBUG: Created stock account: {new_account}")
+            else:
+                print(Fore.YELLOW + f"DEBUG: Creating regular account {account_name} of type {account_type}")
+                new_account = Account(
+                    name=account_name,
+                    type=account_type,
+                    commodity=book.default_currency,
+                    parent=parent or book.root_account,
+                    description=description or f"{account_name} account"
+                )
+                print(Fore.YELLOW + f"DEBUG: Created account: {new_account}")
             
             # Create opening transaction if initial balance is provided
             if initial_balance != 0:
+                print(Fore.YELLOW + f"DEBUG: Creating initial balance transaction of {initial_balance}")
+                
                 # Determine the offset account based on account type
                 if account_type.upper() in ["ASSET", "BANK"]:
+                    print(Fore.YELLOW + "DEBUG: Creating asset/bank transaction")
+                    equity_acc = book.accounts.get(fullname="Equity")
+                    if not equity_acc:
+                        print(Fore.RED + "DEBUG: Equity account not found!")
+                        raise ValueError("Equity account not found")
+                        
+                    print(Fore.YELLOW + f"DEBUG: Creating transaction with splits: {new_account.fullname} (+{initial_balance}), Equity (-{initial_balance})")
                     Transaction(
                         currency=book.default_currency,
                         description="Initial balance",
                         splits=[
                             Split(account=new_account, value=Decimal(str(initial_balance))),
-                            Split(account=book.accounts.get(fullname="Equity"), value=Decimal(str(-initial_balance)))
+                            Split(account=equity_acc, value=Decimal(str(-initial_balance)))
                         ],
                         post_date=date.today(),
                         enter_date=datetime.now(),
                     )
                 
                 elif account_type.upper() in ["LIABILITY", "CREDIT"]:
+                    print(Fore.YELLOW + "DEBUG: Creating liability/credit transaction")
+                    equity_acc = book.accounts.get(fullname="Equity")
+                    if not equity_acc:
+                        print(Fore.RED + "DEBUG: Equity account not found!")
+                        raise ValueError("Equity account not found")
+                        
+                    print(Fore.YELLOW + f"DEBUG: Creating transaction with splits: {new_account.fullname} (-{initial_balance}), Equity (+{initial_balance})")
                     Transaction(
                         currency=book.default_currency,
                         description="Initial balance",
                         splits=[
                             Split(account=new_account, value=Decimal(str(-initial_balance))),
-                            Split(account=book.accounts.get(fullname="Equity"), value=Decimal(str(initial_balance)))
+                            Split(account=equity_acc, value=Decimal(str(initial_balance)))
                         ],
                         post_date=date.today(),
                         enter_date=datetime.now(),
                     )
             
+            print(Fore.YELLOW + "DEBUG: Saving book changes")
             book.save()
+            print(Fore.YELLOW + "DEBUG: Book saved successfully")
         
         book.close()
         if initial_balance != 0:
+            print(Fore.YELLOW + f"DEBUG: Successfully created subaccount '{account_name}' under '{parent_account}' with initial balance of {initial_balance}")
             return f"Successfully created subaccount '{account_name}' under '{parent_account}' with initial balance of {initial_balance}"
         print(Fore.YELLOW + f"DEBUG: Completed create_subaccount {parent_account}/{account_name}")
+        print(Fore.YELLOW + f"DEBUG: Successfully created subaccount '{account_name}' under '{parent_account}'")
         return f"Successfully created subaccount '{account_name}' under '{parent_account}'"
     
     except Exception as e:
+        print(Fore.RED + f"DEBUG: Error creating subaccount: {str(e)}")
         return f"Error creating subaccount: {str(e)}"
 
 @gnucash_agent.tool
@@ -1156,6 +1243,54 @@ async def set_accounts_currency(ctx: RunContext[GnuCashQuery], currency_code: st
         return f"Error setting accounts currency: {str(e)}"
 
 @gnucash_agent.tool
+async def set_accounts_precision(ctx: RunContext[GnuCashQuery], precision: int = 1000) -> str:
+    """Set the precision (number of decimal places) for all non-top-level accounts.
+    
+    Args:
+        precision (int): Number of decimal places to set (default: 1000)
+        
+    Returns - str: Success message or error details
+        
+    Raises:
+        ValueError: If no active book or invalid precision
+        piecash.BookError: If precision change fails
+    """
+    global active_book
+    if not active_book:
+        return "No active book. Please create or open a book first."
+    
+    if precision < 0:
+        return "Precision must be a positive integer."
+    
+    try:
+        book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
+        updated = 0
+        
+        affected_accounts = []
+        with book:
+            # Get all accounts except root and top-level accounts
+            top_level_accounts = [acc.name for acc in book.root_account.children]
+            
+            for account in book.accounts:
+                # Skip root and top-level accounts
+                if account.type != "ROOT" and account.parent and account.parent.name not in top_level_accounts:
+                    account.commodity.fraction = precision
+                    updated += 1
+                    affected_accounts.append(account.fullname)
+                    
+            book.save()
+            
+        book.close()
+        print(Fore.YELLOW + f"DEBUG: Set precision to {precision} for {updated} accounts")
+        print(Fore.YELLOW + "Affected accounts:")
+        for acc in affected_accounts:
+            print(Fore.YELLOW + f"  - {acc}")
+        return f"Successfully set precision to {precision} for {updated} accounts:\n" + "\n".join(f"  - {acc}" for acc in affected_accounts)
+        
+    except Exception as e:
+        return f"Error setting accounts precision: {str(e)}"
+
+@gnucash_agent.tool
 async def set_default_currency(ctx: RunContext[GnuCashQuery], currency_code: str) -> str:
     """Set the default currency for the active book.
     
@@ -1361,36 +1496,62 @@ async def add_stock_transaction(
             
             if is_purchase:
                 print(Fore.YELLOW + "DEBUG: Creating purchase transaction")
+                # Create splits with proper quantity tracking
                 stock_split = Split(
                     account=stock_acc,
                     value=Decimal(total_amount + commission),
+                    quantity=Decimal(abs(units)),  # Number of shares
                     memo=f"Buy {abs(units)} {stock_symbol} @ {price}"
                 )
                 print(Fore.YELLOW + f"DEBUG: Created stock split: {stock_split}")
                 splits.append(stock_split)
-                
+                    
                 credit_split = Split(
                     account=credit_acc,
-                    value=Decimal(-(total_amount + commission))
+                    value=Decimal(-(total_amount + commission)),
+                    quantity=Decimal(-(total_amount + commission))  # Cash amount
                 )
                 print(Fore.YELLOW + f"DEBUG: Created credit split: {credit_split}")
                 splits.append(credit_split)
+                    
+                # # Update the price database
+                # print(Fore.YELLOW + f"DEBUG: Updating price database for {stock_symbol}")
+                # stock_acc.commodity.update_prices([
+                #     {
+                #         "datetime": datetime.now(),
+                #         "value": Decimal(price),
+                #         "currency": book.default_currency
+                #     }
+                # ])
             else:
                 print(Fore.YELLOW + "DEBUG: Creating sale transaction")
+                # Create splits with proper quantity tracking
                 credit_split = Split(
                     account=credit_acc,
                     value=Decimal(total_amount - commission),
+                    quantity=Decimal(total_amount - commission),  # Cash amount
                     memo=f"Sell {abs(units)} {stock_symbol} @ {price}"
                 )
                 print(Fore.YELLOW + f"DEBUG: Created credit split: {credit_split}")
                 splits.append(credit_split)
-                
+                    
                 stock_split = Split(
                     account=stock_acc,
-                    value=Decimal(-(total_amount - commission))
+                    value=Decimal(-(total_amount - commission)),
+                    quantity=Decimal(-abs(units))  # Number of shares
                 )
                 print(Fore.YELLOW + f"DEBUG: Created stock split: {stock_split}")
                 splits.append(stock_split)
+                    
+                # Update the price database
+                print(Fore.YELLOW + f"DEBUG: Updating price database for {stock_symbol}")
+                stock_acc.commodity.update_prices([
+                    {
+                        "datetime": datetime.now(),
+                        "value": Decimal(price),
+                        "currency": book.default_currency
+                    }
+                ])
             
             if commission > 0:
                 print(Fore.YELLOW + f"DEBUG: Adding commission split: {commission}")
