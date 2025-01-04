@@ -1,11 +1,15 @@
 import readline
+import shutil
 import warnings
+from pathlib import Path
 from typing import Union, Optional
 
 from colorama import Fore, init
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from pydantic_ai import Agent, RunContext
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
 
 init(autoreset=True)  # Auto reset colors after each print
 from datetime import date, timedelta
@@ -21,7 +25,7 @@ import sqlalchemy as sa
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.styles import getSampleStyleSheet
 
 # Load environment variables and filter warnings
 load_dotenv(verbose=True)
@@ -1472,6 +1476,51 @@ async def export_reports_pdf(ctx: RunContext[GnuCashQuery], output_file: str = "
     except Exception as e:
         return f"Error exporting reports to PDF: {str(e)}"
 
+class BackupFileHandler(FileSystemEventHandler):
+    """Handler for managing GnuCash backup files."""
+    
+    def __init__(self, sweep_interval: int = 120, sweep_age: int = 5):
+        self.sweep_interval = sweep_interval
+        self.sweep_age = sweep_age
+        self.last_sweep = datetime.now()
+        # Create backups directory if it doesn't exist
+        Path('backups').mkdir(exist_ok=True)
+        
+    def on_created(self, event):
+        """Handle new file creation."""
+        if event.is_directory:
+            return
+            
+        # Check if it's time for a sweep
+        now = datetime.now()
+        if (now - self.last_sweep).total_seconds() >= self.sweep_interval:
+            self.sweep_old_backups()
+            self.last_sweep = now
+    
+    def sweep_old_backups(self):
+        """Move backup files older than sweep_age minutes to backups folder."""
+        print(Fore.YELLOW + "DEBUG: Sweeping for old backup files...")
+        cutoff = datetime.now() - timedelta(minutes=self.sweep_age)
+        
+        # Look for backup files in current directory
+        for filepath in Path('.').glob('*.*.gnucash'):
+            try:
+                # Parse timestamp from filename
+                parts = filepath.name.split('.')
+                if len(parts) >= 3 and len(parts[-2]) == 14 and parts[-2].isdigit():
+                    timestamp_str = parts[-2]
+                    file_time = datetime.strptime(timestamp_str, '%Y%m%d%H%M%S')
+                else:
+                    continue  # Skip files that don't match the expected format
+                
+                if file_time < cutoff:
+                    # Move file to backups folder
+                    dest = Path('backups') / filepath.name
+                    print(Fore.YELLOW + f"DEBUG: Moving old backup {filepath} to {dest}")
+                    shutil.move(str(filepath), str(dest))
+            except (ValueError, IndexError) as e:
+                print(Fore.RED + f"Error processing backup file {filepath}: {e}")
+
 async def generate_reports(ctx: RunContext[GnuCashQuery]) -> str:
     """Generate standard financial reports from the GnuCash book.
     
@@ -1518,9 +1567,22 @@ def run_cli(book_name: str = None):
     Args:
         book_name (str, optional): Name of book to open at startup
     """
+    # Set up backup file monitoring
+    sweep_interval = int(os.getenv('GC_CLI_SWEEP_SECS', '120'))
+    sweep_age = int(os.getenv('GC_CLI_SWEEP_AGE', '5'))
+    event_handler = BackupFileHandler(sweep_interval, sweep_age)
+    observer = Observer()
+    observer.schedule(event_handler, '.', recursive=False)
+    observer.start()
+    print(Fore.YELLOW + f"Started backup file monitoring (sweep interval: {sweep_interval}s, sweep age: {sweep_age}m)")
+    
+    # Perform initial sweep immediately
+    event_handler.sweep_old_backups()
+    
     # Configure readline for command history and editing
     readline.parse_and_bind('tab: complete')  # Enable tab completion
-    
+    # readline.set_startup_hook(lambda: readline.insert_text("Hello "))
+
     # Set up history file
     histfile = os.path.join(os.path.expanduser("~"), ".gnucash_history")
     try:
@@ -1586,14 +1648,20 @@ def run_cli(book_name: str = None):
         print(f"Active book: {active_book}")
     else:
         print("No active book - create or open one to begin")
-    
+
+    def clear_line():
+        readline.set_startup_hook(lambda: readline.insert_text(""))  # Clear current input buffer
+        readline.redisplay()
+        print("Clearline called ......")
+
     while True:
         try:
             # Read input with history support
             prompt = Fore.GREEN + "GnuCash> "
             try:
                 # Clear the line before reading input
-                print('\r' + ' ' * (len(prompt) + 100) + '\r', end='')  # Clear any leftover chars
+                # print('\r' + ' ' * (len(prompt) + 100) + '\r', end='')  # Clear any leftover chars
+                clear_line()
                 query = input(prompt).strip()
                 
                 if query.lower() == 'quit':
@@ -1624,6 +1692,10 @@ def run_cli(book_name: str = None):
         readline.write_history_file(histfile)
     except Exception as e:
         print(f"Error saving history: {str(e)}")
+    
+    # Stop the watchdog observer
+    observer.stop()
+    observer.join()
 
 if __name__ == "__main__":
     import argparse
