@@ -1231,6 +1231,71 @@ async def save_as_template(ctx: RunContext[GnuCashQuery], template_name: str) ->
     except Exception as e:
         return f"Error creating template: {str(e)}"
 
+@gnucash_agent.tool
+async def search_accounts(ctx: RunContext[GnuCashQuery], pattern: str) -> str:
+    """Search for accounts matching a name pattern (supports regex).
+    
+    Args:
+        pattern (str): Account name pattern to search for (case-insensitive)
+                      Supports partial matches and regex patterns
+                      
+    Returns - str: List of matching accounts with full paths or error message
+    
+    Examples:
+        search_accounts checking  -> Finds accounts containing "checking"
+        search_accounts ^ass     -> Finds accounts starting with "ass"
+        search_accounts .*card$  -> Finds accounts ending with "card"
+    """
+    global active_book
+    if not active_book:
+        return "No active book. Please create or open a book first."
+    
+    try:
+        import re
+        book = piecash.open_book(active_book, open_if_lock=True, readonly=True)
+        
+        # Try to determine if the pattern is meant to be regex
+        is_regex = any(c in pattern for c in '.^$*+?{}[]\\|()')
+        
+        if is_regex:
+            try:
+                regex = re.compile(pattern, re.IGNORECASE)
+            except re.error as e:
+                return f"Invalid regex pattern: {str(e)}"
+        else:
+            # Treat as simple substring search
+            regex = re.compile(f".*{re.escape(pattern)}.*", re.IGNORECASE)
+        
+        # Search for matching accounts
+        matches = []
+        for account in book.accounts:
+            if account.type != "ROOT" and regex.search(account.name):
+                matches.append({
+                    'fullname': account.fullname,
+                    'type': account.type,
+                    'balance': account.get_balance()
+                })
+        
+
+        if not matches:
+            book.close()
+            return f"No accounts found matching pattern: {pattern}"
+        
+        # Format results
+        output = [f"Found {len(matches)} matching accounts:"]
+        curr_symbol = book.default_currency.mnemonic
+        for acc in sorted(matches, key=lambda x: x['fullname']):
+            color = Fore.GREEN if acc['balance'] >= 0 else Fore.RED
+            output.append(f"{acc['fullname']} ({acc['type']}) - {color}{curr_symbol} {acc['balance']:,.2f}")
+        
+        print(Fore.YELLOW + f"DEBUG: Completed search_accounts for pattern: {pattern}")
+
+        book.close()
+        return "\n".join(output)
+        
+    except Exception as e:
+        return f"Error searching accounts: {str(e)}"
+
 async def generate_reports(ctx: RunContext[GnuCashQuery]) -> str:
     """Generate standard financial reports from the GnuCash book.
     
@@ -1288,6 +1353,7 @@ def run_cli(book_name: str = None):
         'set_currency': 'Set default currency (USD, EUR, etc)',
         'get_currency': 'Get current default currency',
         'set_accounts_currency': 'Set currency for all accounts (USD, EUR, etc)',
+        'search_accounts': 'Search accounts by name pattern (supports regex)',
         'help': 'Show this help message'
     }
     global active_book
