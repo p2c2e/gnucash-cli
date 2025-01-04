@@ -1599,7 +1599,6 @@ async def run_cli(book_name: str = None):
         completer=gnucash_completer,
         enable_history_search=True,
         complete_while_typing=True,
-        erase_when_done=True,
         mouse_support=False,
     )
     
