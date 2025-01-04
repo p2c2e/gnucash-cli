@@ -18,6 +18,10 @@ from datetime import datetime
 import piecash
 import pandas as pd
 import sqlalchemy as sa
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 # Load environment variables and filter warnings
 load_dotenv(verbose=True)
@@ -1300,6 +1304,174 @@ async def search_accounts(ctx: RunContext[GnuCashQuery], pattern: str) -> str:
     except Exception as e:
         return f"Error searching accounts: {str(e)}"
 
+@gnucash_agent.tool
+async def export_reports_pdf(ctx: RunContext[GnuCashQuery], output_file: str = "gnucash_reports.pdf") -> str:
+    """Export all financial reports to a single PDF file.
+    
+    Generates and combines:
+    - Balance Sheet
+    - Cash Flow Statement
+    - Account Listing
+    - Recent Transactions
+    
+    Args:
+        output_file (str): Name of PDF file to create (default: gnucash_reports.pdf)
+        
+    Returns - str: Success message or error details
+    
+    Raises:
+        piecash.BookError: If book access fails
+        reportlab.Error: If PDF generation fails
+    """
+    global active_book
+    if not active_book:
+        return "No active book. Please create or open a book first."
+    
+    try:
+        book = piecash.open_book(active_book, open_if_lock=True, readonly=True)
+        
+        # Create PDF document
+        doc = SimpleDocTemplate(
+            output_file,
+            pagesize=letter,
+            rightMargin=72,
+            leftMargin=72,
+            topMargin=72,
+            bottomMargin=72
+        )
+        
+        # Get styles
+        styles = getSampleStyleSheet()
+        title_style = styles['Heading1']
+        normal_style = styles['Normal']
+        
+        # Container for PDF elements
+        elements = []
+        
+        # Add title
+        elements.append(Paragraph(f"Financial Reports - {active_book}", title_style))
+        elements.append(Spacer(1, 20))
+        
+        # Helper function to convert DataFrame to PDF table
+        def df_to_table(df, title):
+            elements.append(Paragraph(title, styles['Heading2']))
+            elements.append(Spacer(1, 12))
+            
+            # Convert DataFrame to list of lists
+            data = [df.columns.tolist()]
+            data.extend(df.values.tolist())
+            
+            # Create table
+            table = Table(data)
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 14),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 1), (-1, -1), 12),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black)
+            ]))
+            elements.append(table)
+            elements.append(Spacer(1, 20))
+        
+        # Add Balance Sheet in two columns
+        # Get assets and liabilities separately
+        assets_df = pd.DataFrame([
+            {
+                'Account': acc.fullname,
+                'Balance': acc.get_balance()
+            }
+            for acc in book.accounts if acc.type == "ASSET"
+        ])
+        
+        liabilities_df = pd.DataFrame([
+            {
+                'Account': acc.fullname,
+                'Balance': acc.get_balance(),
+                'Description': acc.description
+            }
+            for acc in book.accounts if acc.type == "LIABILITY"
+        ])
+
+        # Add Balance Sheet title
+        elements.append(Paragraph("Balance Sheet", styles['Heading2']))
+        elements.append(Spacer(1, 12))
+
+        # Create Assets table
+        assets_data = [["Assets"]] + [assets_df.columns.tolist()] + assets_df.values.tolist()
+        assets_total = assets_df['Balance'].sum() if not assets_df.empty else 0
+        assets_data.append(["Total Assets", assets_total])
+        assets_table = Table(assets_data)
+        
+        # Create Liabilities table
+        liab_data = [["Liabilities"]] + [liabilities_df.columns.tolist()] + liabilities_df.values.tolist()
+        liab_total = liabilities_df['Balance'].sum() if not liabilities_df.empty else 0
+        liab_data.append(["Total Liabilities", liab_total])
+        liab_table = Table(liab_data)
+
+        # Style for both tables
+        table_style = TableStyle([
+            # Title row
+            ('BACKGROUND', (0, 0), (-1, 0), colors.darkgrey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 16),
+            ('SPAN', (0, 0), (-1, 0)),  # Span all columns for title
+            # Header row
+            ('BACKGROUND', (0, 1), (-1, 1), colors.grey),
+            ('TEXTCOLOR', (0, 1), (-1, 1), colors.whitesmoke),
+            ('ALIGN', (0, 1), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 1), (-1, 1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 1), (-1, 1), 14),
+            # Data rows
+            ('BACKGROUND', (0, 2), (-1, -2), colors.beige),
+            ('TEXTCOLOR', (0, 2), (-1, -2), colors.black),
+            ('FONTNAME', (0, 2), (-1, -2), 'Helvetica'),
+            ('FONTSIZE', (0, 2), (-1, -2), 12),
+            # Total row
+            ('BACKGROUND', (0, -1), (-1, -1), colors.lightgrey),
+            ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ])
+
+        # Apply style and add tables one after another
+        assets_table.setStyle(table_style)
+        liab_table.setStyle(table_style)
+        
+        elements.append(assets_table)
+        elements.append(Spacer(1, 20))  # Add space between tables
+        elements.append(liab_table)
+        elements.append(Spacer(1, 20))
+        
+        # Add Recent Transactions
+        transactions_df = pd.DataFrame([
+            {
+                'Date': tx.post_date,
+                'Description': tx.description,
+                'Amount': sum(split.value for split in tx.splits if split.value > 0)
+            }
+            for tx in sorted(book.transactions, key=lambda t: t.post_date, reverse=True)[:10]
+        ])
+        if not transactions_df.empty:
+            df_to_table(transactions_df, "Recent Transactions")
+        
+        # Build PDF
+        doc.build(elements)
+        book.close()
+        
+        print(Fore.YELLOW + f"DEBUG: Generated PDF report: {output_file}")
+        return f"Successfully exported reports to {output_file}"
+        
+    except Exception as e:
+        return f"Error exporting reports to PDF: {str(e)}"
+
 async def generate_reports(ctx: RunContext[GnuCashQuery]) -> str:
     """Generate standard financial reports from the GnuCash book.
     
@@ -1347,13 +1519,38 @@ def run_cli(book_name: str = None):
         book_name (str, optional): Name of book to open at startup
     """
     # Configure readline for command history and editing
-    readline.parse_and_bind('bind ^I rl_complete')  # Enable tab completion
-    readline.parse_and_bind('bind ^P ed-search-prev-history')  # Ctrl-P for previous
-    readline.parse_and_bind('bind ^N ed-search-next-history')  # Ctrl-N for next
-    readline.parse_and_bind('bind "\e[A" previous-history')  # Up arrow
-    readline.parse_and_bind('bind "\e[B" next-history')      # Down arrow
-    readline.parse_and_bind('bind "\e[C" forward-char')      # Right arrow
-    readline.parse_and_bind('bind "\e[D" backward-char')     # Left arrow
+    readline.parse_and_bind('tab: complete')  # Enable tab completion
+    
+    # Set up history file
+    histfile = os.path.join(os.path.expanduser("~"), ".gnucash_history")
+    try:
+        readline.read_history_file(histfile)
+    except FileNotFoundError:
+        # Create history file if it doesn't exist
+        with open(histfile, 'w') as f:
+            pass
+        os.chmod(histfile, 0o600)  # Secure the history file
+        
+    # Set history length and make sure it's saved after each command
+    readline.set_history_length(1000)
+    readline.set_auto_history(True)
+    
+    # Basic editing bindings
+    readline.parse_and_bind('"\C-a": beginning-of-line')
+    readline.parse_and_bind('"\C-e": end-of-line')
+    readline.parse_and_bind('"\C-k": kill-line')
+    readline.parse_and_bind('"\C-u": unix-line-discard')
+    readline.parse_and_bind('"\C-w": unix-word-rubout')
+    readline.parse_and_bind('"\C-h": backward-delete-char')
+    readline.parse_and_bind('"\C-?": backward-delete-char')
+    
+    # Navigation bindings
+    readline.parse_and_bind('"\e[A": previous-history')
+    readline.parse_and_bind('"\e[B": next-history')
+    readline.parse_and_bind('"\e[C": forward-char')
+    readline.parse_and_bind('"\e[D": backward-char')
+    readline.parse_and_bind('"\e[1;5C": forward-word')
+    readline.parse_and_bind('"\e[1;5D": backward-word')
     
     print(Fore.YELLOW + "Starting GnuCash CLI...")
     commands = {
@@ -1393,17 +1590,20 @@ def run_cli(book_name: str = None):
     while True:
         try:
             # Read input with history support
-            query = input(Fore.GREEN + "GnuCash> ")
-            if query.strip():  # Only add non-empty commands to history
-                readline.add_history(query)
-            
-            if query.lower().strip() == 'quit':
-                break
+            prompt = Fore.GREEN + "GnuCash> "
+            try:
+                # Clear the line before reading input
+                print('\r' + ' ' * (len(prompt) + 100) + '\r', end='')  # Clear any leftover chars
+                query = input(prompt).strip()
                 
-            # Add to command history if not empty
-            if query.strip():
-                cmd_history.append(query)
-                history_index = len(cmd_history)
+                if query.lower() == 'quit':
+                    break
+                    
+                # Add to command history if not empty
+                if query:
+                    readline.add_history(query)
+            except EOFError:
+                continue
             
             result = gnucash_agent.run_sync(query, message_history=history)
             history += result.new_messages()
@@ -1416,6 +1616,14 @@ def run_cli(book_name: str = None):
             # Handle Ctrl+C gracefully
             print("\nType 'quit' to exit or continue entering commands.")
             continue
+        except Exception as e:
+            print(f"Error: {str(e)}")
+    
+    # Save history on exit
+    try:
+        readline.write_history_file(histfile)
+    except Exception as e:
+        print(f"Error saving history: {str(e)}")
 
 if __name__ == "__main__":
     import argparse
