@@ -348,7 +348,8 @@ async def create_subaccount(
     account_name: str,
     account_type: str = None,
     description: str = None,
-    initial_balance: float = 0.0
+    initial_balance: float = 0.0,
+    account_data: dict = None
 ) -> str:
     """Create a new subaccount under a specified parent account.
     
@@ -422,28 +423,50 @@ async def create_subaccount(
             # For stock accounts, create with proper commodity
             if account_type == "STOCK":
                 log.debug("creating_stock_account")
-                
-                # First ensure the commodity (stock) exists
+                    
+                # Get namespace from YAML or use default
+                namespace = account_data.get('namespace', os.getenv('GC_CLI_COMMODITY_NAMESPACE', 'NSE')) if account_data else os.getenv('GC_CLI_COMMODITY_NAMESPACE', 'NSE')
+                log.debug("using_commodity_namespace", namespace=namespace)
+                    
+                # Try to find existing commodity first
+                stock_commodity = None
                 try:
-                    namespace = os.getenv('GC_CLI_COMMODITY_NAMESPACE', 'NSE')
-                    log.debug("using_commodity_namespace", namespace=namespace)
                     stock_commodity = book.commodities(namespace=namespace, mnemonic=account_name)
                     log.debug("found_existing_stock_commodity", stock_commodity=stock_commodity)
                 except KeyError:
                     # Create new stock commodity if it doesn't exist
                     log.debug("creating_new_stock_commodity", account_name=account_name)
                     stock_commodity = piecash.Commodity(
-                        namespace=namespace,  # Use configured namespace for stocks
+                        namespace=namespace,
                         mnemonic=account_name,
                         fullname=account_name,
-                        fraction=1000,  # Standard fraction for stocks (must be integer)
+                        fraction=1000,  # Standard fraction for stocks
                         cusip=None,
                         book=book
                     )
                     log.debug("created_stock_commodity", stock_commodity=stock_commodity)
+                    book.save()  # Save to ensure commodity is persisted
 
-                book.save() # Save first - to allow linking of the Commodity to the account
+                # Create the stock account
                 log.debug("creating_stock_account", account_name=account_name)
+                
+                # Create the commodity if it doesn't exist
+                if not stock_commodity:
+                    log.debug("creating_new_stock_commodity", 
+                            namespace=namespace,
+                            mnemonic=account_name)
+                    stock_commodity = piecash.Commodity(
+                        namespace=namespace,
+                        mnemonic=account_name,
+                        fullname=account_name,
+                        fraction=1000,  # Standard fraction for stocks
+                        cusip=None,
+                        book=book
+                    )
+                    log.debug("created_stock_commodity", stock_commodity=stock_commodity)
+                    book.save()  # Save to ensure commodity is persisted
+
+                # Create the stock account linked to the commodity
                 new_account = Account(
                     name=account_name,
                     type="STOCK",
@@ -453,6 +476,21 @@ async def create_subaccount(
                     description=description or f"{account_name} stock account",
                     book=book
                 )
+                
+                # Add initial price if provided
+                if 'initial_price' in account_data:
+                    price = Decimal(str(account_data['initial_price']))
+                    log.debug("adding_initial_price", 
+                            stock_symbol=account_name,
+                            price=price)
+                    stock_commodity.update_prices([
+                        {
+                            "datetime": datetime.now(),
+                            "value": price,
+                            "currency": book.default_currency
+                        }
+                    ])
+                book.save()  # Save after account creation
                 log.debug("created_stock_account", new_account=new_account)
             else:
                 log.debug("creating_regular_account", account_name=account_name, account_type=account_type)
@@ -1097,18 +1135,48 @@ async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: st
                     results.append(f"Account already exists: {fullname} - checking for children")
                     new_acc = existing
                 else:
-                    # Create new account
-                    print(Fore.YELLOW + f"DEBUG: Creating new account: {acc['name']} of type {acc.get('type', 'ASSET')}")
-                    new_acc = Account(
-                        name=acc['name'],
-                        type=acc.get('type', parent.type if parent is not None else "ASSET").upper(), # default to parent account type
-                        commodity=book.default_currency,
-                        parent=parent or book.root_account,
-                        description=acc.get('description', '')
-                    )
-                    # Save immediately after account creation
-                    book.save()
-                    print(Fore.YELLOW + f"DEBUG: Created and saved new account: {new_acc.fullname}")
+                    # Handle stock accounts differently
+                    if acc.get('type', '').upper() == "STOCK":
+                        print(Fore.YELLOW + f"DEBUG: Creating stock account: {acc['name']}")
+                        namespace = acc.get('namespace', os.getenv('GC_CLI_COMMODITY_NAMESPACE', 'NSE'))
+                        try:
+                            stock_commodity = book.commodities(namespace=namespace, mnemonic=acc['name'])
+                            print(Fore.YELLOW + f"DEBUG: Found existing commodity: {stock_commodity.mnemonic}")
+                        except KeyError:
+                            print(Fore.YELLOW + f"DEBUG: Creating new commodity: {acc['name']} in namespace {namespace}")
+                            stock_commodity = piecash.Commodity(
+                                namespace=namespace,
+                                mnemonic=acc['name'],
+                                fullname=acc['name'],
+                                fraction=1000,
+                                book=book
+                            )
+                            book.save()
+                            print(Fore.YELLOW + f"DEBUG: Created new commodity: {stock_commodity.mnemonic}")
+
+                        new_acc = Account(
+                            name=acc['name'],
+                            type="STOCK",
+                            commodity=stock_commodity,
+                            commodity_scu=1000,
+                            parent=parent or book.root_account,
+                            description=acc.get('description', '')
+                        )
+                        book.save()
+                        print(Fore.YELLOW + f"DEBUG: Created and saved new stock account: {new_acc.fullname}")
+                    else:
+                        # Create new account
+                        print(Fore.YELLOW + f"DEBUG: Creating new account: {acc['name']} of type {acc.get('type', 'ASSET')}")
+                        new_acc = Account(
+                            name=acc['name'],
+                            type=acc.get('type', parent.type if parent is not None else "ASSET").upper(), # default to parent account type
+                            commodity=book.default_currency,
+                            parent=parent or book.root_account,
+                            description=acc.get('description', '')
+                        )
+                        # Save immediately after account creation
+                        book.save()
+                        print(Fore.YELLOW + f"DEBUG: Created and saved new account: {new_acc.fullname}")
 
                 # Handle initial balance if provided
                 if 'initial_balance' in acc:

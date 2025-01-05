@@ -29,6 +29,11 @@ accounts:
           - name: Stocks
             initial_balance: 15000.00
             balance_date: "2025-01-01"
+            children:
+              - name: STOCKA
+                type: STOCK
+                namespace: NSE
+                initial_price: 100.00  # Initial price per share
           - name: Bonds
             initial_balance: 10000.00
             balance_date: "2025-01-01"
