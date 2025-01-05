@@ -281,7 +281,7 @@ async def transfer_funds(ctx: RunContext[GnuCashQuery], from_account: str, to_ac
                 enter_date=datetime.now(),
             )
             book.save()
-        
+
         book.close()
         log.debug(f"Transfer funds completed from {from_account} to {to_account} amount: {amount}")
         return f"Successfully transferred ${amount:.2f} from {from_account} to {to_account}"
@@ -1942,6 +1942,23 @@ async def export_reports_pdf(ctx: RunContext[GnuCashQuery], output_file: str = "
         
     except Exception as e:
         return f"Error exporting reports to PDF: {str(e)}"
+
+@gnucash_agent.tool
+async def get_accounting_hints(ctx: RunContext[GnuCashQuery]) -> str:
+    """
+    If you are ever stuck with how to proceed with accounting, check here.
+    The tool will return some guidelines on how to proceed. In case you are still not able to resolve the task,
+    do not keep calling this function repeatedly.
+    Returns the value of the GC_CLI_ACCOUNTING_HINTS environment variable.
+    If the variable is not set, it returns a default message.
+    """
+    log.debug("Entering get_accounting_hints")
+    hints = os.getenv("GC_CLI_ACCOUNTING_HINTS")
+    if hints:
+        log.debug(f"Found accounting hints: {hints}")
+        return hints
+    log.debug("No accounting hints found")
+    return "There are no hints as of now"
 
 class BackupScheduler:
     """Periodic scheduler for managing GnuCash backup files."""
