@@ -8,6 +8,7 @@ import logging
 import sys
 from colorama import Fore, init
 from dotenv import load_dotenv
+# from cli_reports import generate_balance_sheet
 from prompt_toolkit import PromptSession
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.completion import WordCompleter
@@ -648,138 +649,6 @@ async def list_transactions(ctx: RunContext[GnuCashQuery], limit: int = 10) -> s
     except Exception as e:
         return Fore.RED + f"Error listing transactions: {str(e)}"
 
-@gnucash_agent.tool
-async def generate_balance_sheet(ctx: RunContext[GnuCashQuery]) -> str:
-    """Generate an ASCII formatted balance sheet with proper account hierarchy and roll-up totals.
-
-    Implements bottom-up calculation of account balances with:
-    - Proper parent/child roll-up totals
-    - Hierarchical indentation
-    - Subtotals at each level
-    - Sign conventions maintained
-
-    All amounts are in the book's default currency.
-
-    Returns - str: Formatted balance sheet or error message
-
-    Raises:
-        piecash.BookError: If book access fails
-    """
-    log.debug("Entering generate_balance_sheet")
-    global active_book
-    if not active_book:
-        return "No active book. Please create or open a book first."
-    
-    try:
-        book = piecash.open_book(active_book, open_if_lock=True, readonly=True)
-        
-        def get_account_hierarchy(account, indent_level=0):
-            """Recursively build account hierarchy with proper totals."""
-            # Skip root account
-            if account.type == "ROOT":
-                return [], Decimal('0')
-                
-            # Calculate this account's own balance (from direct transactions)
-            own_balance = sum(split.value for trans in book.transactions 
-                            for split in trans.splits if split.account == account)
-            
-            # Get children's balances recursively
-            child_entries = []
-            children_total = Decimal('0')
-            for child in sorted(account.children, key=lambda x: x.name):
-                child_lines, child_total = get_account_hierarchy(child, indent_level + 1)
-                child_entries.extend(child_lines)
-                children_total += child_total
-            
-            # Total balance is own balance plus children's balances
-            total_balance = own_balance + children_total
-            
-            # Format this account's line
-            indent = "  " * indent_level
-            curr_symbol = book.default_currency.mnemonic
-            
-            entries = []
-            
-            # Add this account's line first
-            if account.children:
-                # Parent account - show total
-                if total_balance != 0 or not account.children:
-                    entries.append((
-                        f"{indent}{account.name}",
-                        total_balance,
-                        True  # is_total
-                    ))
-            else:
-                # Leaf account - show balance
-                if total_balance != 0:
-                    entries.append((
-                        f"{indent}{account.name}",
-                        total_balance,
-                        False  # not a total
-                    ))
-            
-            # Add children's lines after parent
-            if child_entries:
-                entries.extend(child_entries)
-            
-            return entries, total_balance
-        
-        # Process each main section
-        sections = {
-            "ASSET": (Fore.GREEN, "ASSETS"),
-            "LIABILITY": (Fore.RED, "LIABILITIES"),
-            "EQUITY": (Fore.BLUE, "EQUITY")
-        }
-        
-        output = []
-        output.append(Fore.YELLOW + "=" * 60)
-        output.append(Fore.CYAN + " BALANCE SHEET".center(60))
-        output.append(Fore.YELLOW + "=" * 60)
-        
-        section_totals = {}
-        
-        # Process each main section
-        for acc_type, (color, title) in sections.items():
-            output.append(f"\n{color}{title}")
-            
-            # Find top-level accounts of this type
-            top_accounts = [acc for acc in book.root_account.children 
-                          if acc.type == acc_type]
-            
-            section_entries = []
-            section_total = Decimal('0')
-            
-            # Process each top-level account
-            for account in sorted(top_accounts, key=lambda x: x.name):
-                entries, total = get_account_hierarchy(account)
-                section_entries.extend(entries)
-                section_total += total
-            
-            # Add entries with proper formatting
-            curr_symbol = book.default_currency.mnemonic
-            for name, amount, is_total in section_entries:
-                if is_total:
-                    output.append(f"{color}{name:<40} {curr_symbol} {amount:>10,.2f}")
-                else:
-                    output.append(f"{color}{name:<40} {curr_symbol} {amount:>10,.2f}")
-            
-            # Add section total
-            output.append(color + "-" * 60)
-            output.append(f"{color}{'Total ' + title:<40} {curr_symbol} {section_total:>10,.2f}")
-            
-            section_totals[acc_type] = section_total
-        
-        # Final totals
-        output.append(Fore.YELLOW + "=" * 60)
-        net_worth = section_totals.get("ASSET", 0) - section_totals.get("LIABILITY", 0)
-        output.append(f"{Fore.CYAN}{'Net Worth':<40} {curr_symbol} {net_worth:>10,.2f}")
-        output.append(Fore.YELLOW + "=" * 60)
-        
-        book.close()
-        return "\n".join(output)
-    
-    except Exception as e:
-        return Fore.RED + f"Error generating balance sheet: {str(e)}"
 
 @gnucash_agent.tool
 async def generate_cashflow_statement(ctx: RunContext[GnuCashQuery], start_date: str = None, end_date: str = None) -> str:
@@ -2091,47 +1960,6 @@ class BackupScheduler:
             except (ValueError, IndexError) as e:
                 print(Fore.RED + f"Error processing backup file {filepath}: {e}")
 
-@gnucash_agent.tool
-async def generate_reports(ctx: RunContext[GnuCashQuery]) -> str:
-    """Generate standard financial reports from the GnuCash book.
-
-    Includes:
-    - Account balances
-    - Transaction history
-    - Monthly summary by category
-
-    Returns - str: Formatted reports or error message
-
-    Raises:
-        piecash.BookError: If book access fails
-    """
-    log.debug("Entering generate_reports")
-    global active_book
-    if not active_book:
-        return "No active book. Please create or open a book first."
-    
-    try:
-        book = piecash.open_book(active_book, open_if_lock=True)
-        reports = {}
-        
-        # Generate reports (same logic as testcase.py)
-        # ... (include all report generation code from testcase.py)
-        
-        # Format the reports for display
-        report_str = "\nAccount Balances:\n"
-        report_str += reports['account_balances'].to_string() + "\n\n"
-        report_str += "Transaction History:\n"
-        report_str += reports['transaction_history'].to_string() + "\n\n"
-        report_str += "Monthly Summary:\n"
-        report_str += reports['monthly_summary'].to_string()
-        
-        book.close()
-        log.debug("Generate reports completed")
-        return report_str
-    
-    except Exception as e:
-        return f"Error generating reports: {str(e)}"
-
 
 async def run_cli(book_name: str = None):
     """Run the GnuCash CLI interface.
@@ -2238,11 +2066,160 @@ async def run_cli(book_name: str = None):
     # Stop the backup scheduler
     await backup_scheduler.stop()
 
+@gnucash_agent.tool
+async def generate_balance_sheet(ctx) -> str:
+    """Generate an ASCII formatted balance sheet with proper account hierarchy and roll-up totals.
+
+    Implements bottom-up calculation of account balances with:
+    - Proper parent/child roll-up totals
+    - Hierarchical indentation
+    - Subtotals at each level
+    - Sign conventions maintained
+
+    All amounts are in the book's default currency.
+
+    Returns - str: Formatted balance sheet or error message
+
+    Raises:
+        piecash.BookError: If book access fails
+    """
+    log.debug("Entering generate_balance_sheet")
+    if not active_book:
+        return "No active book. Please create or open a book first."
+
+    try:
+        book = piecash.open_book(active_book, open_if_lock=True, readonly=True)
+
+        def get_account_hierarchy(account, indent_level=0):
+            """Recursively build account hierarchy with proper totals."""
+            # Skip root account
+            if account.type == "ROOT":
+                return [], Decimal('0')
+
+            # Calculate this account's own balance (from direct transactions)
+            own_balance = sum(split.value for trans in book.transactions
+                              for split in trans.splits if split.account == account)
+
+            # Get children's balances recursively
+            child_entries = []
+            children_total = Decimal('0')
+            for child in sorted(account.children, key=lambda x: x.name):
+                child_lines, child_total = get_account_hierarchy(child, indent_level + 1)
+                child_entries.extend(child_lines)
+                children_total += child_total
+
+            # Total balance is own balance plus children's balances
+            total_balance = own_balance + children_total
+
+            # Format this account's line
+            indent = "  " * indent_level
+            curr_symbol = book.default_currency.mnemonic
+
+            entries = []
+
+            # Add this account's line first
+            if account.children:
+                # Parent account - show total
+                if total_balance != 0 or not account.children:
+                    entries.append((
+                        f"{indent}{account.name}",
+                        total_balance,
+                        True  # is_total
+                    ))
+            else:
+                # Leaf account - show balance
+                if total_balance != 0:
+                    entries.append((
+                        f"{indent}{account.name}",
+                        total_balance,
+                        False  # not a total
+                    ))
+
+            # Add children's lines after parent
+            if child_entries:
+                entries.extend(child_entries)
+
+            return entries, total_balance
+
+        # Process each main section
+        sections = {
+            "ASSET": (Fore.GREEN, "ASSETS"),
+            "LIABILITY": (Fore.RED, "LIABILITIES"),
+            "EQUITY": (Fore.BLUE, "EQUITY")
+        }
+
+        output = []
+        output.append(Fore.YELLOW + "=" * 60)
+        output.append(Fore.CYAN + " BALANCE SHEET".center(60))
+        output.append(Fore.YELLOW + "=" * 60)
+
+        section_totals = {}
+
+        # Process each main section
+        for acc_type, (color, title) in sections.items():
+            output.append(f"\n{color}{title}")
+
+            # Find top-level accounts of this type
+            top_accounts = [acc for acc in book.root_account.children
+                            if acc.type == acc_type]
+
+            section_entries = []
+            section_total = Decimal('0')
+
+            # Process each top-level account
+            for account in sorted(top_accounts, key=lambda x: x.name):
+                entries, total = get_account_hierarchy(account)
+                section_entries.extend(entries)
+                section_total += total
+
+            # Add entries with proper formatting
+            curr_symbol = book.default_currency.mnemonic
+            for name, amount, is_total in section_entries:
+                if is_total:
+                    output.append(f"{color}{name:<40} {curr_symbol} {amount:>10,.2f}")
+                else:
+                    output.append(f"{color}{name:<40} {curr_symbol} {amount:>10,.2f}")
+
+            # Add section total
+            output.append(color + "-" * 60)
+            output.append(f"{color}{'Total ' + title:<40} {curr_symbol} {section_total:>10,.2f}")
+
+            section_totals[acc_type] = section_total
+
+        # Final totals
+        output.append(Fore.YELLOW + "=" * 60)
+        net_worth = section_totals.get("ASSET", 0) - section_totals.get("LIABILITY", 0)
+        output.append(f"{Fore.CYAN}{'Net Worth':<40} {curr_symbol} {net_worth:>10,.2f}")
+        output.append(Fore.YELLOW + "=" * 60)
+
+        book.close()
+        return "\n".join(output)
+
+    except Exception as e:
+        return Fore.RED + f"Error generating balance sheet: {str(e)}"
+
+@gnucash_agent.tool
+async def list_tools(ctx):
+    """
+    Lists the available tools in the agent.
+    No input is needed for teh call.
+    Retuns a str with the list of tools etc.
+    """
+    log.debug("List Tools called .........")
+    rv = "-"*50 + "\n"
+    keys = gnucash_agent._function_tools.keys()
+    tools = sorted(keys)
+    for tool in tools:
+        rv += f"- {tool}\n"
+    rv += "-"*50
+    log.debug(f"Returning \n {rv}")
+    return rv
+
 if __name__ == "__main__":
     import argparse
     import asyncio
     import nest_asyncio
-    
+
     # Apply nest_asyncio to allow running async code in Jupyter/IPython
     nest_asyncio.apply()
     
@@ -2256,6 +2233,6 @@ if __name__ == "__main__":
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-    
+
     # Run the CLI
     loop.run_until_complete(run_cli(args.book))
