@@ -4,7 +4,8 @@ import warnings
 from pathlib import Path
 from typing import Union
 
-import structlog
+import logging
+import sys
 from colorama import Fore, init
 from dotenv import load_dotenv
 from prompt_toolkit import PromptSession
@@ -31,26 +32,23 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 
-# Configure structlog with minimum level
-structlog.configure(
-    processors=[
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.add_log_level,
-        structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
-        # structlog.processors.JSONRenderer(),
-        structlog.processors.KeyValueRenderer(key_order=["event"])
-    ],
-    wrapper_class=structlog.make_filtering_bound_logger(logging.DEBUG),  # INFO = 20
-    context_class=dict,
-    logger_factory=structlog.WriteLoggerFactory(
-        file=open("gnucash.log", "a")
-    ),
-    cache_logger_on_first_use=True
-)
+# Configure logging
+log = logging.getLogger(__name__)
+log.setLevel(logging.DEBUG)
 
-# Create logger instance
-log = structlog.get_logger()
+# File handler for all log messages
+file_handler = logging.FileHandler("gnucash.log")
+file_handler.setLevel(logging.DEBUG)
+file_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
+file_handler.setFormatter(file_formatter)
+log.addHandler(file_handler)
+
+# Stream handler for error messages only
+stream_handler = logging.StreamHandler(sys.stdout)
+stream_handler.setLevel(logging.ERROR)
+stream_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
+stream_handler.setFormatter(stream_formatter)
+log.addHandler(stream_handler)
 
 # Load environment variables and filter warnings
 load_dotenv(verbose=True)
@@ -58,7 +56,7 @@ warnings.filterwarnings('ignore', category=sa.exc.SAWarning)
 
 # Get default currency from environment or use INR
 DEFAULT_CURRENCY = os.getenv('GC_CLI_DEFAULT_CURRENCY', 'INR')
-log.info("initialized_app", default_currency=DEFAULT_CURRENCY)
+log.info(f"Initialized app with default currency: {DEFAULT_CURRENCY}")
 
 class GnuCashQuery(BaseModel):
     query: str
@@ -85,7 +83,7 @@ gnucash_agent = Agent(
 )
 
 # Log the system prompt for reference
-log.info("agent_created", system_prompt=system_prompt)
+log.info(f"Agent created with system prompt: {system_prompt}")
 
 @gnucash_agent.tool
 async def create_book(ctx: RunContext[GnuCashQuery], book_name: str = "sample_accounts") -> str:
@@ -115,7 +113,7 @@ async def create_book(ctx: RunContext[GnuCashQuery], book_name: str = "sample_ac
     """
     global active_book
     try:
-        log.info("creating_book", book_name=f"{book_name}.gnucash")
+        log.info(f"Creating book: {book_name}.gnucash")
         active_book = f"{book_name}.gnucash"
         book = piecash.create_book(
             f"{book_name}.gnucash",
@@ -123,7 +121,7 @@ async def create_book(ctx: RunContext[GnuCashQuery], book_name: str = "sample_ac
             currency=DEFAULT_CURRENCY,
             keep_foreign_keys=False
         )
-        log.info("book_created", book_name=active_book)
+        log.info(f"Book created: {active_book}")
         
         with book:
             # Create main account categories
@@ -172,8 +170,7 @@ async def create_book(ctx: RunContext[GnuCashQuery], book_name: str = "sample_ac
             # ... (include all account and transaction creation code from testcase.py)
 
             book.save()
-        log.debug("create_book_completed", book_name=book_name)
-        log.debug("create_book_completed", book_name=book_name)
+        log.debug(f"Create book completed: {book_name}")
         return "Successfully created sample GnuCash book with accounts and transactions."
     
     except Exception as e:
@@ -191,10 +188,9 @@ async def get_active_book(ctx: RunContext[GnuCashQuery]) -> str:
     """
     global active_book
     if active_book:
-        log.debug("get_active_book_found", active_book=active_book)
-        log.debug("get_active_book_found", active_book=active_book)
+        log.debug(f"Active book found: {active_book}")
         return f"Active book: {active_book}"
-    log.debug("get_active_book_not_found")
+    log.debug("No active book found")
     return "No active book - create or open one first"
 
 @gnucash_agent.tool
@@ -218,12 +214,12 @@ async def open_book(ctx: RunContext[GnuCashQuery], book_name: str) -> str:
         print(f"Attempting to open book: {book_name}")
         # Try to open the book to verify it exists, ignoring lock
         book = piecash.open_book(sqlite_file=book_name, open_if_lock=True, readonly=False)
-        log.debug("book_opened_successfully", book=book)
+        log.debug(f"Book opened successfully: {book}")
         book.close()
         
         active_book = book_name
         print(f"Active book set to: {active_book}")
-        log.debug("open_book_completed", book_name=book_name)
+        log.debug(f"Open book completed: {book_name}")
         print(Fore.YELLOW + f"DEBUG: Completed open_book for {book_name}")
         return f"Successfully opened book: {book_name} (ignored lock if present)"
     except Exception as e:
@@ -270,8 +266,7 @@ async def list_accounts(ctx: RunContext[GnuCashQuery]) -> str:
             
         # Format as a table
         df = pd.DataFrame(accounts)
-        log.debug("list_accounts_completed")
-        log.debug("list_accounts_completed")
+        log.debug("List accounts completed")
         return "Accounts in the book:\n" + df.to_string(index=False)
     
     except Exception as e:
@@ -334,8 +329,7 @@ async def transfer_funds(ctx: RunContext[GnuCashQuery], from_account: str, to_ac
             book.save()
         
         book.close()
-        log.debug("transfer_funds_completed", from_account=from_account, to_account=to_account, amount=amount)
-        log.debug("transfer_funds_completed", from_account=from_account, to_account=to_account, amount=amount)
+        log.debug(f"Transfer funds completed from {from_account} to {to_account} amount: {amount}")
         return f"Successfully transferred ${amount:.2f} from {from_account} to {to_account}"
     
     except Exception as e:
@@ -404,38 +398,38 @@ async def create_subaccount(
     try:
         print(Fore.YELLOW + f"DEBUG: Attempting to open book: {active_book}")
         book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
-        log.debug("book_opened_successfully")
+        log.debug("Book opened successfully")
         
         # Find the parent account
-        log.debug("looking_for_parent_account", parent_account=parent_account)
+        log.debug(f"Looking for parent account: {parent_account}")
         parent = book.accounts.get(fullname=parent_account)
         if not parent:
-            log.error("parent_account_not_found", parent_account=parent_account)
+            log.error(f"Parent account not found: {parent_account}")
             book.close()
             print(Fore.YELLOW + f"DEBUG: Parent account '{parent_account}' not found - returning error")
             return f"Parent account '{parent_account}' not found."
-        log.debug("found_parent_account", fullname=parent.fullname, type=parent.type)
+        log.debug(f"Found parent account: {parent.fullname}, type: {parent.type}")
         
         # Create the subaccount
         with book:
-            log.debug("starting_account_creation", account_name=account_name)
+            log.debug(f"Starting account creation: {account_name}")
             
             # For stock accounts, create with proper commodity
             if account_type == "STOCK":
-                log.debug("creating_stock_account")
+                log.debug("Creating stock account")
                     
                 # Get namespace from YAML or use default
                 namespace = account_data.get('namespace', os.getenv('GC_CLI_COMMODITY_NAMESPACE', 'NSE')) if account_data else os.getenv('GC_CLI_COMMODITY_NAMESPACE', 'NSE')
-                log.debug("using_commodity_namespace", namespace=namespace)
+                log.debug(f"Using commodity namespace: {namespace}")
                     
                 # Try to find existing commodity first
                 stock_commodity = None
                 try:
                     stock_commodity = book.commodities(namespace=namespace, mnemonic=account_name)
-                    log.debug("found_existing_stock_commodity", stock_commodity=stock_commodity)
+                    log.debug(f"Found existing stock commodity: {stock_commodity}")
                 except KeyError:
                     # Create new stock commodity if it doesn't exist
-                    log.debug("creating_new_stock_commodity", account_name=account_name)
+                    log.debug(f"Creating new stock commodity: {account_name}")
                     stock_commodity = piecash.Commodity(
                         namespace=namespace,
                         mnemonic=account_name,
@@ -444,17 +438,15 @@ async def create_subaccount(
                         cusip=None,
                         book=book
                     )
-                    log.debug("created_stock_commodity", stock_commodity=stock_commodity)
+                    log.debug(f"Created stock commodity: {stock_commodity}")
                     book.save()  # Save to ensure commodity is persisted
 
                 # Create the stock account
-                log.debug("creating_stock_account", account_name=account_name)
+                log.debug(f"Creating stock account: {account_name}")
                 
                 # Create the commodity if it doesn't exist
                 if not stock_commodity:
-                    log.debug("creating_new_stock_commodity", 
-                            namespace=namespace,
-                            mnemonic=account_name)
+                    log.debug(f"Creating new stock commodity: {namespace}, mnemonic: {account_name}")
                     stock_commodity = piecash.Commodity(
                         namespace=namespace,
                         mnemonic=account_name,
@@ -463,7 +455,7 @@ async def create_subaccount(
                         cusip=None,
                         book=book
                     )
-                    log.debug("created_stock_commodity", stock_commodity=stock_commodity)
+                    log.debug(f"Created stock commodity: {stock_commodity}")
                     book.save()  # Save to ensure commodity is persisted
 
                 # Create the stock account linked to the commodity
@@ -491,9 +483,9 @@ async def create_subaccount(
                         }
                     ])
                 book.save()  # Save after account creation
-                log.debug("created_stock_account", new_account=new_account)
+                log.debug(f"Created stock account: {new_account}")
             else:
-                log.debug("creating_regular_account", account_name=account_name, account_type=account_type)
+                log.debug(f"Creating regular account: {account_name}, type: {account_type}")
                 new_account = Account(
                     name=account_name,
                     type=account_type,
@@ -501,24 +493,21 @@ async def create_subaccount(
                     parent=parent or book.root_account,
                     description=description or f"{account_name} account"
                 )
-                log.debug("created_account", new_account=new_account)
+                log.debug(f"Created account: {new_account}")
             
             # Create opening transaction if initial balance is provided
             if initial_balance != 0:
-                log.debug("creating_initial_balance_transaction", initial_balance=initial_balance)
+                log.debug(f"Creating initial balance transaction: {initial_balance}")
                 
                 # Determine the offset account based on account type
                 if account_type.upper() in ["ASSET", "BANK"]:
-                    log.debug("creating_asset_bank_transaction")
+                    log.debug("Creating asset/bank transaction")
                     equity_acc = book.accounts.get(fullname="Equity")
                     if not equity_acc:
-                        log.error("equity_account_not_found")
+                        log.error("Equity account not found")
                         raise ValueError("Equity account not found")
                         
-                    log.debug("creating_transaction_with_splits", 
-                            account=new_account.fullname,
-                            amount=initial_balance,
-                            equity_amount=-initial_balance)
+                    log.debug(f"Creating transaction with splits: account: {new_account.fullname}, amount: {initial_balance}, equity amount: {-initial_balance}")
                     Transaction(
                         currency=book.default_currency,
                         description="Initial balance",
@@ -531,16 +520,13 @@ async def create_subaccount(
                     )
                 
                 elif account_type.upper() in ["LIABILITY", "CREDIT"]:
-                    log.debug("creating_liability_credit_transaction")
+                    log.debug("Creating liability/credit transaction")
                     equity_acc = book.accounts.get(fullname="Equity")
                     if not equity_acc:
-                        log.error("equity_account_not_found")
+                        log.error("Equity account not found")
                         raise ValueError("Equity account not found")
                         
-                    log.debug("creating_transaction_with_splits",
-                            account=new_account.fullname,
-                            amount=-initial_balance,
-                            equity_amount=initial_balance)
+                    log.debug(f"Creating transaction with splits: account: {new_account.fullname}, amount: {-initial_balance}, equity amount: {initial_balance}")
                     Transaction(
                         currency=book.default_currency,
                         description="Initial balance",
@@ -552,23 +538,19 @@ async def create_subaccount(
                         enter_date=datetime.now(),
                     )
             
-            log.debug("saving_book_changes")
+            log.debug("Saving book changes")
             book.save()
-            log.debug("book_saved_successfully")
+            log.debug("Book saved successfully")
         
         book.close()
         if initial_balance != 0:
-            log.debug("subaccount_created_with_balance",
-                     account_name=account_name,
-                     parent_account=parent_account,
-                     initial_balance=initial_balance)
+            log.debug(f"Subaccount created with balance: {account_name}, parent: {parent_account}, initial balance: {initial_balance}")
             return f"Successfully created subaccount '{account_name}' under '{parent_account}' with initial balance of {initial_balance}"
-        log.debug("create_subaccount_completed", parent_account=parent_account, account_name=account_name)
-        log.debug("create_subaccount_completed", parent_account=parent_account, account_name=account_name)
+        log.debug(f"Create subaccount completed: parent: {parent_account}, account: {account_name}")
         return f"Successfully created subaccount '{account_name}' under '{parent_account}'"
     
     except Exception as e:
-        log.error("error_creating_subaccount", error=str(e))
+        log.error(f"Error creating subaccount: {str(e)}")
         return f"Error creating subaccount: {str(e)}"
 
 @gnucash_agent.tool
@@ -657,8 +639,7 @@ async def add_transaction(
         
         # Format success message
         details = "\n".join(f"  - {acc_name}: ${amount:.2f}" for acc_name, amount in to_accounts)
-        log.debug("add_transaction_completed")
-        log.debug("add_transaction_completed")
+        log.debug("Add transaction completed")
         return f"Successfully transferred ${total_amount:.2f} from {from_account} to:\n{details}"
     
     except Exception as e:
@@ -722,8 +703,7 @@ async def list_transactions(ctx: RunContext[GnuCashQuery], limit: int = 10) -> s
                 color = Fore.RED if split['Amount'] < 0 else Fore.GREEN
                 output.append(f"  {split['Account']}: {color}{split['Amount']:+.2f} {Fore.RESET}{split['Memo']}")
         
-        log.debug("list_transactions_completed", limit=limit)
-        log.debug("list_transactions_completed", limit=limit)
+        log.debug(f"List transactions completed, limit: {limit}")
         return "\n".join(output)
     
     except Exception as e:
@@ -887,8 +867,7 @@ async def generate_cashflow_statement(ctx: RunContext[GnuCashQuery], start_date:
         return "No active book. Please create or open a book first."
     
     try:
-        log.debug("cashflow_statement_start", active_book=active_book)
-        log.debug("starting_cashflow_statement", active_book=active_book)
+        log.debug(f"Cashflow statement start, active book: {active_book}")
         book = piecash.open_book(active_book, open_if_lock=True, readonly=True)
         print(Fore.YELLOW + f"DEBUG: Book opened successfully")
         
@@ -896,20 +875,20 @@ async def generate_cashflow_statement(ctx: RunContext[GnuCashQuery], start_date:
         today = date.today()
         if not start_date:
             start_date = date(today.year, 1, 1).strftime('%Y-%m-%d')
-            log.debug("using_default_start_date", start_date=start_date)
+            log.debug(f"Using default start date: {start_date}")
         if not end_date:
             end_date = today.strftime('%Y-%m-%d')
-            log.debug("using_default_end_date", end_date=end_date)
+            log.debug(f"Using default end date: {end_date}")
             
         # Convert to date objects
         start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
         end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
-        log.debug("date_range_set", start_date=start_date, end_date=end_date)
+        log.debug(f"Date range set: start: {start_date}, end: {end_date}")
         
         # Initialize totals
         money_in = Decimal('0.00')
         money_out = Decimal('0.00')
-        log.debug("initialized_totals")
+        log.debug("Initialized totals")
         
         # Track subcategories
         income_categories = {}
@@ -919,39 +898,30 @@ async def generate_cashflow_statement(ctx: RunContext[GnuCashQuery], start_date:
         transaction_count = 0
         for tx in book.transactions:
             transaction_count += 1
-            log.debug("processing_transaction", 
-                     transaction_count=transaction_count,
-                     description=tx.description,
-                     post_date=tx.post_date)
+            log.debug(f"Processing transaction {transaction_count}: {tx.description}, post date: {tx.post_date}")
             
             if start_date <= tx.post_date <= end_date:
                 print(Fore.YELLOW + "DEBUG: Transaction within date range")
                 for split in tx.splits:
                     account = split.account
                     amount = split.value
-                    log.debug("processing_split",
-                             account=account.fullname,
-                             account_type=account.type,
-                             amount=amount)
+                    log.debug(f"Processing split: account: {account.fullname}, type: {account.type}, amount: {amount}")
                     
                     # Income accounts (money in)
                     if account.type == "INCOME":
                         money_in += abs(amount)  # Use absolute value for consistent sign
                         category = account.name
                         income_categories[category] = income_categories.get(category, Decimal('0.00')) + abs(amount)
-                        log.debug("updated_money_in", new_total=money_in)
+                        log.debug(f"Updated money in: {money_in}")
                     
                     # Expense accounts (money out)
                     elif account.type == "EXPENSE":
                         money_out += abs(amount)  # Use absolute value for consistent sign
                         category = account.name
                         expense_categories[category] = expense_categories.get(category, Decimal('0.00')) + abs(amount)
-                        log.debug("updated_money_out", new_total=money_out)
+                        log.debug(f"Updated money out: {money_out}")
             else:
-                log.debug("skipped_transaction_outside_range", 
-                         post_date=tx.post_date,
-                         start_date=start_date,
-                         end_date=end_date)
+                log.debug(f"Skipped transaction outside range: post date: {tx.post_date}, start: {start_date}, end: {end_date}")
         
         # Calculate net cash flow
         net_cash_flow = money_in - money_out
@@ -1064,7 +1034,7 @@ async def purge_backups(
         result.append(Fore.GREEN + f"\n{len(remaining)} backups remain:")
         result.extend(f"  - {f}" for f in remaining)
     
-    log.debug("purge_backups_completed", book_name=book_name)
+    log.debug(f"Purge backups completed for book: {book_name}")
     return "\n".join(result)
 
 @gnucash_agent.tool
@@ -1263,8 +1233,7 @@ async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: st
             book.save()
         
         book.close()
-        log.debug("create_accounts_from_file_completed", file_path=file_path)
-        log.debug("create_accounts_from_file_completed", file_path=file_path)
+        log.debug(f"Create accounts from file completed: {file_path}")
         return "\n".join(results)
     
     except Exception as e:
@@ -1287,8 +1256,7 @@ async def get_default_currency(ctx: RunContext[GnuCashQuery]) -> str:
         book = piecash.open_book(active_book, open_if_lock=True, readonly=True)
         currency_code = book.default_currency.mnemonic
         book.close()
-        log.debug("got_default_currency", currency_code=currency_code)
-        log.debug("got_default_currency", currency_code=currency_code)
+        log.debug(f"Got default currency: {currency_code}")
         return f"Default currency is {currency_code}"
         
     except Exception as e:
@@ -1334,8 +1302,7 @@ async def set_accounts_currency(ctx: RunContext[GnuCashQuery], currency_code: st
             book.save()
             
         book.close()
-        log.debug("changed_accounts_currency", currency_code=currency_code, updated_accounts=updated)
-        log.debug("changed_accounts_currency", currency_code=currency_code, updated_accounts=updated)
+        log.debug(f"Changed accounts currency to {currency_code} for {updated} accounts")
         return f"Successfully set currency to {currency_code} for {updated} accounts"
         
     except Exception as e:
@@ -1380,8 +1347,7 @@ async def set_accounts_precision(ctx: RunContext[GnuCashQuery], precision: int =
             book.save()
             
         book.close()
-        log.debug("set_accounts_precision", precision=precision, updated_accounts=updated)
-        log.debug("set_accounts_precision", precision=precision, updated_accounts=updated, affected_accounts=affected_accounts)
+        log.debug(f"Set accounts precision to {precision} for {updated} accounts")
         return f"Successfully set precision to {precision} for {updated} accounts:\n" + "\n".join(f"  - {acc}" for acc in affected_accounts)
         
     except Exception as e:
@@ -1422,8 +1388,7 @@ async def set_default_currency(ctx: RunContext[GnuCashQuery], currency_code: str
             book.save()
             
         book.close()
-        log.debug("changed_default_currency", currency_code=currency_code)
-        log.debug("changed_default_currency", currency_code=currency_code)
+        log.debug(f"Changed default currency to {currency_code}")
         return f"Successfully set default currency to {currency_code}"
         
     except Exception as e:
@@ -1500,8 +1465,7 @@ async def save_as_template(ctx: RunContext[GnuCashQuery], template_name: str) ->
         source_book.close()
         template_book.close()
         
-        log.debug("template_saved", template_path=template_path)
-        log.debug("template_saved", template_path=template_path)
+        log.debug(f"Template saved: {template_path}")
         return f"Successfully created template {template_path} from {active_book}"
     
     except Exception as e:
@@ -1545,61 +1509,56 @@ async def add_stock_transaction(
         return "No active book. Please create or open a book first."
     
     try:
-        log.debug("starting_stock_transaction", stock_symbol=stock_symbol)
-        log.debug("stock_transaction_inputs",
-                 units=units,
-                 price=price,
-                 commission=commission)
+        log.debug(f"Starting stock transaction for {stock_symbol}")
+        log.debug(f"Stock transaction inputs: units: {units}, price: {price}, commission: {commission}")
         
         # Convert inputs
-        log.debug("parsing_transaction_date", transaction_date=transaction_date)
+        log.debug(f"Parsing transaction date: {transaction_date}")
         transaction_date = datetime.strptime(transaction_date, '%Y-%m-%d').date()
-        log.debug("parsed_transaction_date", parsed_date=transaction_date)
+        log.debug(f"Parsed transaction date: {transaction_date}")
         
         total_amount = abs(units) * price
         is_purchase = units > 0
-        log.debug("calculated_transaction_totals",
-                 total_amount=total_amount,
-                 is_purchase=is_purchase)
+        log.debug(f"Calculated transaction totals: total amount: {total_amount}, is purchase: {is_purchase}")
         
-        log.debug("opening_book", active_book=active_book)
+        log.debug(f"Opening book: {active_book}")
         book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
-        log.debug("book_opened_successfully")
+        log.debug("Book opened successfully")
         
         # Find the stock account
-        log.debug("looking_for_stock_account", stock_account=stock_account)
+        log.debug(f"Looking for stock account: {stock_account}")
         stock_acc = book.accounts.get(fullname=stock_account)
         if not stock_acc:
             print(Fore.RED + f"DEBUG: Stock account not found: {stock_account}")
             book.close()
             return f"Stock account '{stock_account}' not found."
-        log.debug("found_stock_account", account=stock_acc.fullname)
+        log.debug(f"Found stock account: {stock_acc.fullname}")
             
         # If credit account not specified, use stock account's parent
         if credit_account is None:
-            log.debug("using_stock_parent_as_credit")
+            log.debug("Using stock parent as credit account")
             if not stock_acc.parent:
                 print(Fore.RED + f"DEBUG: Stock account has no parent: {stock_acc.fullname}")
                 book.close()
                 return f"Stock account '{stock_account}' has no parent account to use as default credit account"
             credit_acc = stock_acc.parent
-            log.debug("using_parent_as_credit", parent_account=credit_acc.fullname)
+            log.debug(f"Using parent as credit account: {credit_acc.fullname}")
         else:
-            log.debug("looking_for_credit_account", credit_account=credit_account)
+            log.debug(f"Looking for credit account: {credit_account}")
             credit_acc = book.accounts.get(fullname=credit_account)
             if not credit_acc:
                 print(Fore.RED + f"DEBUG: Credit account not found: {credit_account}")
                 book.close()
                 return f"Credit account '{credit_account}' not found."
-            log.debug("found_credit_account", account=credit_acc.fullname)
+            log.debug(f"Found credit account: {credit_acc.fullname}")
         
         # Create the transaction
-        log.debug("creating_transaction_splits")
+        log.debug("Creating transaction splits")
         with book:
             splits = []
             
             if is_purchase:
-                log.debug("creating_purchase_transaction")
+                log.debug("Creating purchase transaction")
                 # Create splits with proper quantity tracking
                 stock_split = Split(
                     account=stock_acc,
@@ -1607,7 +1566,7 @@ async def add_stock_transaction(
                     quantity=Decimal(abs(units)),  # Number of shares
                     memo=f"Buy {abs(units)} {stock_symbol} @ {price}"
                 )
-                log.debug("created_stock_split", split=stock_split)
+                log.debug(f"Created stock split: {stock_split}")
                 splits.append(stock_split)
                     
                 credit_split = Split(
@@ -1615,7 +1574,7 @@ async def add_stock_transaction(
                     value=Decimal(-(total_amount + commission)),
                     quantity=Decimal(-(total_amount + commission))  # Cash amount
                 )
-                log.debug("created_credit_split", split=credit_split)
+                log.debug(f"Created credit split: {credit_split}")
                 splits.append(credit_split)
                     
                 # # Update the price database
@@ -1628,7 +1587,7 @@ async def add_stock_transaction(
                 #     }
                 # ])
             else:
-                log.debug("creating_sale_transaction")
+                log.debug("Creating sale transaction")
                 # Create splits with proper quantity tracking
                 credit_split = Split(
                     account=credit_acc,
@@ -1636,7 +1595,7 @@ async def add_stock_transaction(
                     quantity=Decimal(total_amount - commission),  # Cash amount
                     memo=f"Sell {abs(units)} {stock_symbol} @ {price}"
                 )
-                log.debug("created_credit_split", split=credit_split)
+                log.debug(f"Created credit split: {credit_split}")
                 splits.append(credit_split)
                     
                 stock_split = Split(
@@ -1644,7 +1603,7 @@ async def add_stock_transaction(
                     value=Decimal(-(total_amount - commission)),
                     quantity=Decimal(-abs(units))  # Number of shares
                 )
-                log.debug("created_stock_split", split=stock_split)
+                log.debug(f"Created stock split: {stock_split}")
                 splits.append(stock_split)
                     
                 # Update the price database
@@ -1658,11 +1617,11 @@ async def add_stock_transaction(
                 # ])
             
             if commission > 0:
-                log.debug("adding_commission_split", commission=commission)
+                log.debug(f"Adding commission split: {commission}")
                 # Add commission as expense
                 commission_acc = book.accounts.get(fullname="Expenses:Commissions")
                 if not commission_acc:
-                    log.debug("creating_commissions_account")
+                    log.debug("Creating commissions account")
                     commission_acc = Account(
                         name="Commissions",
                         type="EXPENSE",
@@ -1670,17 +1629,17 @@ async def add_stock_transaction(
                         parent=book.accounts.get(fullname="Expenses"),
                         description="Trading commissions and fees"
                     )
-                    log.debug("created_commission_account", account=commission_acc.fullname)
+                    log.debug(f"Created commission account: {commission_acc.fullname}")
                 
                 commission_split = Split(
                     account=commission_acc,
                     value=Decimal(commission),
                     memo=f"{stock_symbol} trade commission"
                 )
-                log.debug("created_commission_split", split=commission_split)
+                log.debug(f"Created commission split: {commission_split}")
                 splits.append(commission_split)
             
-            log.debug("creating_transaction_object")
+            log.debug("Creating transaction object")
             transaction = Transaction(
                 currency=book.default_currency,
                 description=f"{'Buy' if is_purchase else 'Sell'} {abs(units)} {stock_symbol} @ {price}",
@@ -1688,22 +1647,21 @@ async def add_stock_transaction(
                 post_date=transaction_date,
                 enter_date=datetime.now(),
             )
-            log.debug("created_transaction", transaction=transaction)
+            log.debug(f"Created transaction: {transaction}")
             
-            log.debug("saving_book")
+            log.debug("Saving book")
             book.save()
             print(Fore.YELLOW + "DEBUG: Book saved successfully")
         
-        log.debug("closing_book")
+        log.debug("Closing book")
         book.close()
-        log.debug("book_closed_successfully")
+        log.debug("Book closed successfully")
         
         action = "purchased" if is_purchase else "sold"
         result = (f"Successfully {action} {abs(units)} shares of {stock_symbol} "
                  f"at {price} on {transaction_date} for total {total_amount:.2f} "
                  f"(commission: {commission:.2f})")
-        log.debug("stock_transaction_completed", result=result)
-        log.debug("stock_transaction_completed", result=result)
+        log.debug(f"Stock transaction completed: {result}")
         return result
     
     except Exception as e:
@@ -1766,8 +1724,7 @@ async def search_accounts(ctx: RunContext[GnuCashQuery], pattern: str) -> str:
             color = Fore.GREEN if acc['balance'] >= 0 else Fore.RED
             output.append(f"{acc['fullname']} ({acc['type']}) - {color}{curr_symbol} {acc['balance']:,.2f}")
         
-        log.debug("search_accounts_completed", pattern=pattern)
-        log.debug("search_accounts_completed", pattern=pattern)
+        log.debug(f"Search accounts completed for pattern: {pattern}")
 
         book.close()
         return "\n".join(output)
@@ -1829,8 +1786,7 @@ async def move_account(ctx: RunContext[GnuCashQuery], account_name: str, new_par
             book.save()
         
         book.close()
-        log.debug("account_moved", account_name=account_name, old_parent=old_parent_name, new_parent=new_parent_name)
-        log.debug("account_moved", account_name=account_name, old_parent=old_parent_name, new_parent=new_parent_name)
+        log.debug(f"Account moved: {account_name} from {old_parent_name} to {new_parent_name}")
         return f"Successfully moved account '{account_name}' from '{old_parent_name}' to '{new_parent_name}'"
         
     except Exception as e:
@@ -1996,8 +1952,7 @@ async def export_reports_pdf(ctx: RunContext[GnuCashQuery], output_file: str = "
         doc.build(elements)
         book.close()
         
-        log.debug("pdf_report_generated", output_file=output_file)
-        log.debug("pdf_report_generated", output_file=output_file)
+        log.debug(f"PDF report generated: {output_file}")
         return f"Successfully exported reports to {output_file}"
         
     except Exception as e:
@@ -2036,14 +1991,12 @@ class BackupScheduler:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                log.error("sweep_error", error=str(e))
+                log.error(f"Sweep error: {str(e)}")
                 await asyncio.sleep(60)  # Wait before retrying after error
     
     def sweep_old_backups(self):
         """Move backup files older than sweep_age minutes to backups folder and delete very old backups."""
-        log.info("starting_backup_sweep", 
-                sweep_age_minutes=self.sweep_age,
-                purge_days=self.purge_days)
+        log.debug(f"Starting backup sweep: sweep age: {self.sweep_age} minutes, purge days: {self.purge_days}")
         move_cutoff = datetime.now() - timedelta(minutes=self.sweep_age)
         delete_cutoff = datetime.now() - timedelta(days=self.purge_days)
         
@@ -2061,10 +2014,10 @@ class BackupScheduler:
                 if file_time < move_cutoff:
                     # Move file to backups folder
                     dest = Path('backups') / filepath.name
-                    log.info("moving_backup", source=str(filepath), destination=str(dest))
+                    log.info(f"Moving backup from {filepath} to {dest}")
                     shutil.move(str(filepath), str(dest))
             except (ValueError, IndexError) as e:
-                log.error("backup_processing_error", filepath=str(filepath), error=str(e))
+                log.error(f"Backup processing error for {filepath}: {str(e)}")
         
         # Delete files older than 2 days from backups folder
         for filepath in Path('backups').glob('*.*.gnucash'):
@@ -2113,8 +2066,7 @@ async def generate_reports(ctx: RunContext[GnuCashQuery]) -> str:
         report_str += reports['monthly_summary'].to_string()
         
         book.close()
-        log.debug("generate_reports_completed")
-        log.debug("generate_reports_completed")
+        log.debug("Generate reports completed")
         return report_str
     
     except Exception as e:
@@ -2132,10 +2084,7 @@ async def run_cli(book_name: str = None):
     sweep_age = int(os.getenv('GC_CLI_SWEEP_AGE_MINS', '5'))
     backup_scheduler = BackupScheduler(sweep_interval, sweep_age)
     await backup_scheduler.start()
-    log.info("backup_scheduler_started", 
-             sweep_interval_seconds=sweep_interval,
-             sweep_age_minutes=sweep_age,
-             purge_days=backup_scheduler.purge_days)
+    log.info(f"Backup scheduler started: sweep interval: {sweep_interval} seconds, sweep age: {sweep_age} minutes, purge days: {backup_scheduler.purge_days}")
     
     # Perform initial sweep immediately
     backup_scheduler.sweep_old_backups()
