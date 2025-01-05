@@ -23,7 +23,7 @@ import glob
 import os
 import yaml
 from decimal import Decimal
-from piecash import Account, Transaction, Split
+from piecash import Account, Transaction, Split, Price, Commodity
 from datetime import datetime
 import piecash
 import pandas as pd
@@ -63,8 +63,7 @@ class GnuCashQuery(BaseModel):
     query: str
     results: list[str]
 
-# Track the active book
-active_book: str = None
+from shared_vars import get_active_book, set_active_book
 
 # Create the GnuCash agent
 system_prompt = (
@@ -113,7 +112,7 @@ async def create_book(ctx: RunContext[GnuCashQuery], book_name: str = "sample_ac
         sqlalchemy.exc.SQLAlchemyError: If database operations fail
     """
     log.debug(f"Entering create_book with book_name: {book_name}")
-    global active_book
+    # global active_book
     try:
         log.info(f"Creating book: {book_name}.gnucash")
         active_book = f"{book_name}.gnucash"
@@ -123,7 +122,7 @@ async def create_book(ctx: RunContext[GnuCashQuery], book_name: str = "sample_ac
             currency=DEFAULT_CURRENCY,
             keep_foreign_keys=False
         )
-        log.info(f"Book created: {active_book}")
+        log.info(f"Book created: {get_active_book()}")
         
         with book:
             # Create main account categories
@@ -179,7 +178,7 @@ async def create_book(ctx: RunContext[GnuCashQuery], book_name: str = "sample_ac
         return Fore.RED + f"Error creating book: {str(e)}"
 
 @gnucash_agent.tool
-async def get_active_book(ctx: RunContext[GnuCashQuery]) -> str:
+async def get_book_name(ctx: RunContext[GnuCashQuery]) -> str:
     """Get the name of the currently active GnuCash book.
     
     The active book is tracked globally and used for all operations.
@@ -189,10 +188,10 @@ async def get_active_book(ctx: RunContext[GnuCashQuery]) -> str:
              or message indicating no active book
     """
     log.debug("Entering get_active_book")
-    global active_book
-    if active_book:
-        log.debug(f"Active book found: {active_book}")
-        return f"Active book: {active_book}"
+    # global active_book
+    if get_active_book():
+        log.debug(f"Active book found: {get_active_book()}")
+        return f"Active book: {get_active_book()}"
     log.debug("No active book found")
     return "No active book - create or open one first"
 
@@ -213,7 +212,7 @@ async def open_book(ctx: RunContext[GnuCashQuery], book_name: str) -> str:
         piecash.BookError: If book is corrupted or invalid
     """
     log.debug(f"Entering open_book with book_name: {book_name}")
-    global active_book
+    # global active_book
     try:
         print(f"Attempting to open book: {book_name}")
         # Try to open the book to verify it exists, ignoring lock
@@ -221,8 +220,8 @@ async def open_book(ctx: RunContext[GnuCashQuery], book_name: str) -> str:
         log.debug(f"Book opened successfully: {book}")
         book.close()
         
-        active_book = book_name
-        print(f"Active book set to: {active_book}")
+        set_active_book(book_name)
+        print(f"Active book set to: {get_active_book()}")
         log.debug(f"Open book completed: {book_name}")
         print(Fore.YELLOW + f"DEBUG: Completed open_book for {book_name}")
         return f"Successfully opened book: {book_name} (ignored lock if present)"
@@ -246,15 +245,17 @@ async def list_accounts(ctx: RunContext[GnuCashQuery]) -> str:
         piecash.BookError: If book access fails
     """
     log.debug("Entering list_accounts")
-    global active_book
-    if not active_book:
+    # global active_book
+    if not get_active_book():
         print(Fore.YELLOW + "DEBUG: No active book - returning error")
         return "No active book. Please create or open a book first."
-    
+
+    log.debug("Check completed ..........")
+
     try:
-        book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
+        book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=False)
         accounts = []
-        
+        log.debug("Opened piecash book ........")
         for account in book.accounts:
             if account.type != "ROOT":  # Skip root account
                 accounts.append({
@@ -265,8 +266,11 @@ async def list_accounts(ctx: RunContext[GnuCashQuery]) -> str:
                 })
         
         book.close()
-        
+
+        log.debug(accounts)
+
         if not accounts:
+            log.debug("No accounts found in the book.")
             return "No accounts found in the book."
             
         # Format as a table
@@ -275,6 +279,7 @@ async def list_accounts(ctx: RunContext[GnuCashQuery]) -> str:
         return "Accounts in the book:\n" + df.to_string(index=False)
     
     except Exception as e:
+        log.exception("Error Listing accounts ...")
         return f"Error listing accounts: {str(e)}"
 
 @gnucash_agent.tool
@@ -299,15 +304,15 @@ async def transfer_funds(ctx: RunContext[GnuCashQuery], from_account: str, to_ac
         piecash.BookError: If transaction creation fails
     """
     log.debug(f"Entering transfer_funds with from_account: {from_account}, to_account: {to_account}, amount: {amount}, description: {description}")
-    global active_book
-    if not active_book:
+    # global active_book
+    if not get_active_book():
         return "No active book. Please create or open a book first."
     
     if amount <= 0:
         return "Amount must be positive."
     
     try:
-        book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
+        book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=False)
         
         # Find the accounts
         from_acc = book.accounts.get(fullname=from_account)
@@ -373,8 +378,8 @@ async def create_subaccount(
     """
     log.debug(f"Entering create_subaccount with parent_account: {parent_account}, account_name: {account_name}, account_type: {account_type}, description: {description}, initial_balance: {initial_balance}")
     print(f"{parent_account}-{account_name}-{account_type}-{description}-{initial_balance}")
-    global active_book
-    if not active_book:
+    # global active_book
+    if not get_active_book():
         return "No active book. Please create or open a book first."
     
     # Validate account type
@@ -404,8 +409,8 @@ async def create_subaccount(
         return f"Invalid account type. Must be one of:\n{valid_types_str}"
     
     try:
-        print(Fore.YELLOW + f"DEBUG: Attempting to open book: {active_book}")
-        book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
+        print(Fore.YELLOW + f"DEBUG: Attempting to open book: {get_active_book()}")
+        book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=False)
         log.debug("Book opened successfully")
         
         # Find the parent account
@@ -523,8 +528,8 @@ async def add_transaction(
     log.debug(f"Entering add_transaction with from_account: {from_account}, to_accounts: {to_accounts}, description: {description}")
     print(Fore.YELLOW + "DEBUG: Starting add_transaction")
 
-    global active_book
-    if not active_book:
+    # global active_book
+    if not get_active_book():
         return "No active book. Please create or open a book first."
     
     if not to_accounts:
@@ -537,7 +542,7 @@ async def add_transaction(
         return "Total amount must be positive."
     
     try:
-        book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
+        book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=False)
         
         # Find the from account
         from_acc = book.accounts.get(fullname=from_account)
@@ -605,12 +610,12 @@ async def list_transactions(ctx: RunContext[GnuCashQuery], limit: int = 10) -> s
         piecash.BookError: If book access fails
     """
     log.debug(f"Entering list_transactions with limit: {limit}")
-    global active_book
-    if not active_book:
+    # global active_book
+    if not get_active_book():
         return "No active book. Please create or open a book first."
     
     try:
-        book = piecash.open_book(active_book, open_if_lock=True, readonly=True)
+        book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=True)
         transactions = []
         
         # Get transactions sorted by date (newest first)
@@ -671,13 +676,13 @@ async def generate_cashflow_statement(ctx: RunContext[GnuCashQuery], start_date:
         ValueError: If dates are invalid
         piecash.BookError: If book access fails
     """
-    global active_book
-    if not active_book:
+    # global active_book
+    if not get_active_book():
         return "No active book. Please create or open a book first."
     
     try:
-        log.debug(f"Cashflow statement start, active book: {active_book}")
-        book = piecash.open_book(active_book, open_if_lock=True, readonly=True)
+        log.debug(f"Cashflow statement start, active book: {get_active_book()}")
+        book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=True)
         print(Fore.YELLOW + f"DEBUG: Book opened successfully")
         
         # Default to YTD if no dates provided
@@ -872,13 +877,13 @@ async def create_stock_sub_account(
     """
     log.debug(f"Entering create_stock_sub_account with ticker: {ticker_symbol}, parent: {parent_path}")
     
-    global active_book
-    if not active_book:
+    # global active_book
+    if not get_active_book():
         log.debug("No active book. Please create or open a book first.")
         return "No active book. Please create or open a book first."
     
     try:
-        book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
+        book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=False)
         
         # Use ticker symbol as account name if none provided
         if account_name is None:
@@ -931,16 +936,19 @@ async def create_stock_sub_account(
             stock_account_name = stock_account.fullname
             
             # Set initial price if provided
-            # if initial_price is not None:
-            #     log.debug(f"Setting initial price: {initial_price}")
-            #     if initial_price == 0.0:
-            #         initial_price = 0.01
-            #
-            #     stock.update_prices([{
-            #         "datetime": datetime.now(),
-            #         "value": initial_price, # Decimal(str(initial_price)),
-            #         "currency": book.default_currency
-            #     }])
+            if initial_price is not None:
+                # log.debug(f"Setting initial price: {initial_price}")
+                if initial_price == 0.0:
+                    initial_price = 0.01
+                #
+                # stock.update_prices([{
+                #     "datetime": datetime.now(),
+                #     "value": initial_price, # Decimal(str(initial_price)),
+                #     "currency": book.default_currency
+                # }])
+                set_commodity_price(book, "NSE", stock.mnemonic,
+                                    book.default_currency.mnemonic,
+                                    Decimal(initial_price), datetime.now())
                 
             book.save()
             
@@ -951,6 +959,101 @@ async def create_stock_sub_account(
     except Exception as e:
         log.exception(e)
         return f"Error creating stock account: {str(e)}"
+
+def ensure_basic_currencies(book):
+    """
+    Ensures that basic currencies (INR, GBP, EUR, USD) exist in the book.
+    Creates them if missing.
+
+    Args:
+        book: GnuCash book instance
+    Returns:
+        dict: Dictionary of currency objects keyed by mnemonic
+    """
+    log.debug("Entering ensure_basic_currencies method")
+
+    # Currency definitions
+    currencies = {
+        "INR": {"fullname": "Indian Rupee", "fraction": 100},
+        "GBP": {"fullname": "British Pound", "fraction": 100},
+        "EUR": {"fullname": "Euro", "fraction": 100},
+        "USD": {"fullname": "US Dollar", "fraction": 100}
+    }
+
+    currency_objects = {}
+
+    try:
+        for mnemonic, details in currencies.items():
+            try:
+                # Try to get existing currency
+                currency = book.commodities(namespace="CURRENCY", mnemonic=mnemonic)
+                log.debug(f"Found existing currency {mnemonic}")
+            except KeyError:
+                # Currency doesn't exist, create it
+                currency = Commodity(namespace="CURRENCY",
+                                     mnemonic=mnemonic,
+                                     fullname=details["fullname"],
+                                     fraction=details["fraction"],
+                                     book=book)
+                book.flush()
+                log.debug(f"Created new currency {mnemonic}")
+
+            currency_objects[mnemonic] = currency
+        log.debug(currency_objects)
+
+        book.save()
+        log.debug("All basic currencies ensured")
+        return currency_objects
+
+    except Exception as e:
+        log.exception(f"Failed to ensure basic currencies: {str(e)}")
+        raise
+
+    finally:
+        log.debug("Exiting ensure_basic_currencies ...")
+
+def set_commodity_price(book, namespace, commodity_mnemonic, currency_mnemonic, price_value, price_date):
+    """
+    Set the price of a commodity for a specific date, ensuring the currency exists
+
+    Args:
+        book: GnuCash book instance
+        namespace (str): Namespace of the commodity (e.g., "NSE")
+        commodity_mnemonic (str): Symbol/mnemonic of the commodity
+        currency_mnemonic (str): Symbol of the currency
+        price_value (Decimal): The price value
+        price_date (datetime.date): The date for the price
+    """
+    log.debug(f"Entering set_commodity_price method !! {namespace} {commodity_mnemonic} {currency_mnemonic} {price_value} {price_date}")
+    try:
+        # Ensure currency exists
+        currencies = ensure_basic_currencies(book)
+
+        # Get the commodity
+        commodity = book.commodities(namespace=namespace, mnemonic=commodity_mnemonic)
+        currency = currencies[currency_mnemonic]  # Use the currency we ensured exists
+
+        if isinstance(price_date, datetime):
+            price_date = price_date.date()
+
+        # Create new price
+        new_price = Price(commodity=commodity,
+                          currency=currency,
+                          date=price_date,
+                          value=price_value,
+                          type='last')
+
+        # Add to book and commit
+        book.prices.append(new_price)
+        book.save()
+        log.debug(f"Set price {price_value} {currency_mnemonic} for {namespace}:{commodity_mnemonic}")
+
+    except Exception as e:
+        log.exception(f"Failed to set commodity price: {str(e)}")
+        raise
+
+    log.debug("Exiting set_commodity_price ...")
+
 
 @gnucash_agent.tool
 async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: str) -> str:
@@ -967,8 +1070,9 @@ async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: st
         yaml.YAMLError: If YAML is invalid
     """
     log.debug(f"Entering create_accounts_from_file with file_path: {file_path}")
-    global active_book
-    if not active_book:
+    # global active_book
+    if not get_active_book():
+        log.debug("No active book. Please create or open a book first.")
         return "No active book. Please create or open a book first."
     
     try:
@@ -982,7 +1086,7 @@ async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: st
             return "Invalid YAML format - missing 'accounts' section"
             
         print(Fore.YELLOW + f"DEBUG: YAML file loaded successfully, found {len(account_data['accounts'])} root accounts")
-        book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
+        book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=False)
         results = []
         
         def create_accounts(accounts, parent=None):
@@ -1039,7 +1143,13 @@ async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: st
                                 book=book
                             )
                             book.save()
-                            print(Fore.YELLOW + f"DEBUG: Created new commodity: {stock_commodity.mnemonic}")
+                            print(Fore.YELLOW + f"DEBUG: !!! Created new commodity: {stock_commodity.mnemonic}")
+                            set_commodity_price(book,
+                                                "NSE",
+                                                stock_commodity.mnemonic,
+                                                book.default_currency.mnemonic,
+                                                Decimal(acc.get('initial_price', 0.0)),
+                                                datetime.now())
 
                         new_acc = Account(
                             name=acc['name'],
@@ -1166,12 +1276,12 @@ async def get_default_currency(ctx: RunContext[GnuCashQuery]) -> str:
         ValueError: If no active book
     """
     log.debug("Entering get_default_currency")
-    global active_book
-    if not active_book:
+    # global active_book
+    if not get_active_book():
         return "No active book. Please create or open a book first."
     
     try:
-        book = piecash.open_book(active_book, open_if_lock=True, readonly=True)
+        book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=True)
         currency_code = book.default_currency.mnemonic
         book.close()
         log.debug(f"Got default currency: {currency_code}")
@@ -1194,15 +1304,15 @@ async def set_accounts_currency(ctx: RunContext[GnuCashQuery], currency_code: st
         piecash.BookError: If currency change fails
     """
     log.debug(f"Entering set_accounts_currency with currency_code: {currency_code}")
-    global active_book
-    if not active_book:
+    # global active_book
+    if not get_active_book():
         return "No active book. Please create or open a book first."
     
     if not currency_code or len(currency_code) != 3:
         return "Invalid currency code. Must be a 3-letter ISO code (e.g., USD, EUR, GBP)"
     
     try:
-        book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
+        book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=False)
         currency_code = currency_code.upper()
         
         with book:
@@ -1241,15 +1351,15 @@ async def set_accounts_precision(ctx: RunContext[GnuCashQuery], precision: int =
         piecash.BookError: If precision change fails
     """
     log.debug(f"Entering set_accounts_precision with precision: {precision}")
-    global active_book
-    if not active_book:
+    # global active_book
+    if not get_active_book():
         return "No active book. Please create or open a book first."
     
     if precision < 0:
         return "Precision must be a positive integer."
     
     try:
-        book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
+        book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=False)
         updated = 0
         
         affected_accounts = []
@@ -1287,15 +1397,15 @@ async def set_default_currency(ctx: RunContext[GnuCashQuery], currency_code: str
         piecash.BookError: If currency change fails
     """
     log.debug(f"Entering set_default_currency with currency_code: {currency_code}")
-    global active_book
-    if not active_book:
+    # global active_book
+    if not get_active_book():
         return "No active book. Please create or open a book first."
     
     if not currency_code or len(currency_code) != 3:
         return "Invalid currency code. Must be a 3-letter ISO code (e.g., USD, EUR, GBP)"
     
     try:
-        book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
+        book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=False)
         currency_code = currency_code.upper()
         
         with book:
@@ -1336,8 +1446,8 @@ async def save_as_template(ctx: RunContext[GnuCashQuery], template_name: str) ->
         piecash.BookError: If template creation fails
     """
     log.debug(f"Entering save_as_template with template_name: {template_name}")
-    global active_book
-    if not active_book:
+    # global active_book
+    if not get_active_book():
         return "No active book. Please create or open a book first."
     
     if not template_name:
@@ -1345,7 +1455,7 @@ async def save_as_template(ctx: RunContext[GnuCashQuery], template_name: str) ->
         
     try:
         # Open source book
-        source_book = piecash.open_book(active_book, open_if_lock=True, readonly=True)
+        source_book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=True)
         
         # Create new template book
         template_path = f"{template_name}.gnucash"
@@ -1356,7 +1466,7 @@ async def save_as_template(ctx: RunContext[GnuCashQuery], template_name: str) ->
             keep_foreign_keys=False
         )
         
-        print(Fore.YELLOW + f"DEBUG: Creating template {template_path} from {active_book}")
+        print(Fore.YELLOW + f"DEBUG: Creating template {template_path} from {get_active_book()}")
         
         def copy_account_structure(src_account, parent=None):
             """Recursively copy account hierarchy without transactions."""
@@ -1388,7 +1498,7 @@ async def save_as_template(ctx: RunContext[GnuCashQuery], template_name: str) ->
         template_book.close()
         
         log.debug(f"Template saved: {template_path}")
-        return f"Successfully created template {template_path} from {active_book}"
+        return f"Successfully created template {template_path} from {get_active_book()}"
     
     except Exception as e:
         return f"Error creating template: {str(e)}"
@@ -1427,8 +1537,8 @@ async def add_stock_transaction(
         piecash.BookError: If transaction creation fails
     """
     log.debug("Entering add_stock_transaction")
-    global active_book
-    if not active_book:
+    # global active_book
+    if not get_active_book():
         return "No active book. Please create or open a book first."
     
     try:
@@ -1444,8 +1554,8 @@ async def add_stock_transaction(
         is_purchase = units > 0
         log.debug(f"Calculated transaction totals: total amount: {total_amount}, is purchase: {is_purchase}")
         
-        log.debug(f"Opening book: {active_book}")
-        book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
+        log.debug(f"Opening book: {get_active_book()}")
+        book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=False)
         log.debug("Book opened successfully")
         
         # Find the stock account
@@ -1538,6 +1648,10 @@ async def add_stock_transaction(
                 #         "currency": book.default_currency
                 #     }
                 # ])
+
+                set_commodity_price(book, "NSE", stock_acc.commodity.mnemonic,
+                                    book.default_currency.mnemonic,
+                                    Decimal(price), datetime.now())
             
             if commission > 0:
                 log.debug(f"Adding commission split: {commission}")
@@ -1562,6 +1676,19 @@ async def add_stock_transaction(
                 log.debug(f"Created commission split: {commission_split}")
                 splits.append(commission_split)
             
+            # Print transaction details
+            print("\nTransaction Details:")
+            print("-" * 50)
+            for split in splits:
+                color = Fore.GREEN if split.value >= 0 else Fore.RED
+                print(f"Account: {split.account.fullname}")
+                print(f"Value: {color}{split.value:,.2f}{Fore.RESET}")
+                if hasattr(split, 'quantity') and split.quantity != split.value:
+                    print(f"Quantity: {color}{split.quantity:,.3f}{Fore.RESET}")
+                if split.memo:
+                    print(f"Memo: {split.memo}")
+                print("-" * 25)
+
             log.debug("Creating transaction object")
             transaction = Transaction(
                 currency=book.default_currency,
@@ -1606,13 +1733,13 @@ async def search_accounts(ctx: RunContext[GnuCashQuery], pattern: str) -> str:
         search_accounts .*card$  -> Finds accounts ending with "card"
     """
     log.debug(f"Entering search_accounts with pattern: {pattern}")
-    global active_book
-    if not active_book:
+    # global active_book
+    if not get_active_book():
         return "No active book. Please create or open a book first."
     
     try:
         import re
-        book = piecash.open_book(active_book, open_if_lock=True, readonly=True)
+        book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=True)
         
         # Try to determine if the pattern is meant to be regex
         is_regex = any(c in pattern for c in '.^$*+?{}[]\\|()')
@@ -1678,12 +1805,12 @@ async def move_account(ctx: RunContext[GnuCashQuery], account_name: str, new_par
         piecash.BookError: If move operation fails
     """
     log.debug(f"Entering move_account with account_name: {account_name}, new_parent_name: {new_parent_name}")
-    global active_book
-    if not active_book:
+    # global active_book
+    if not get_active_book():
         return "No active book. Please create or open a book first."
     
     try:
-        book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
+        book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=False)
         
         # Find the accounts
         account = book.accounts.get(fullname=account_name)
@@ -1737,12 +1864,12 @@ async def export_reports_pdf(ctx: RunContext[GnuCashQuery], output_file: str = "
         reportlab.Error: If PDF generation fails
     """
     log.debug(f"Entering export_reports_pdf with output_file: {output_file}")
-    global active_book
-    if not active_book:
+    # global active_book
+    if not get_active_book():
         return "No active book. Please create or open a book first."
     
     try:
-        book = piecash.open_book(active_book, open_if_lock=True, readonly=True)
+        book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=True)
         
         # Create PDF document
         doc = SimpleDocTemplate(
@@ -1763,7 +1890,7 @@ async def export_reports_pdf(ctx: RunContext[GnuCashQuery], output_file: str = "
         elements = []
         
         # Add title
-        elements.append(Paragraph(f"Financial Reports (CURRENTLY BROKEN) - {active_book}", title_style))
+        elements.append(Paragraph(f"Financial Reports (CURRENTLY BROKEN) - {get_active_book()}", title_style))
         elements.append(Spacer(1, 20))
         
         # Helper function to convert DataFrame to PDF table
@@ -2013,7 +2140,7 @@ async def run_cli(book_name: str = None):
     #     'move_account': 'Move account to new parent (account_name new_parent_name)',
     #     'help': 'Show this help message'
     # }
-    global active_book
+    # global active_book
     history = []
     
     # Try to open book if provided
@@ -2028,7 +2155,7 @@ async def run_cli(book_name: str = None):
     # for cmd, desc in commands.items():
     #     print(f"  {cmd} - {desc}")
     # if active_book:
-    #     print(f"Active book: {active_book}")
+    #     print(f"Active book: {get_active_book()}")
     # else:
     #     print("No active book - create or open one to begin")
 
@@ -2053,8 +2180,8 @@ async def run_cli(book_name: str = None):
             history += result.new_messages()
             history = history[-5:]  # Keep last 5 messages
             print(result.data)
-            if active_book:
-                print(f"\n[Active book: {active_book}]")
+            if get_active_book():
+                print(f"\n[Active book: {get_active_book()}]")
                 
         except KeyboardInterrupt:
             # Handle Ctrl+C gracefully
@@ -2084,11 +2211,11 @@ async def generate_balance_sheet(ctx) -> str:
         piecash.BookError: If book access fails
     """
     log.debug("Entering generate_balance_sheet")
-    if not active_book:
+    if not get_active_book():
         return "No active book. Please create or open a book first."
 
     try:
-        book = piecash.open_book(active_book, open_if_lock=True, readonly=True)
+        book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=True)
 
         def get_account_hierarchy(account, indent_level=0):
             """Recursively build account hierarchy with proper totals."""
