@@ -1848,6 +1848,7 @@ async def move_account(ctx: RunContext[GnuCashQuery], account_name: str, new_par
     except Exception as e:
         return f"Error moving account: {str(e)}"
 
+@gnucash_agent.tool
 async def export_reports_pdf(ctx: RunContext[GnuCashQuery], output_file: str = "gnucash_reports.pdf") -> str:
     """Export all financial reports to a single PDF file.
 
@@ -2090,6 +2091,7 @@ class BackupScheduler:
             except (ValueError, IndexError) as e:
                 print(Fore.RED + f"Error processing backup file {filepath}: {e}")
 
+@gnucash_agent.tool
 async def generate_reports(ctx: RunContext[GnuCashQuery]) -> str:
     """Generate standard financial reports from the GnuCash book.
 
