@@ -210,7 +210,7 @@ async def list_accounts(ctx: RunContext[GnuCashQuery]) -> str:
         
         book.close()
 
-        log.debug(accounts)
+        log.debug(f"Found {len(accounts)} accounts")
 
         if not accounts:
             log.debug("No accounts found in the book.")
@@ -1701,7 +1701,10 @@ async def search_accounts(ctx: RunContext[GnuCashQuery], pattern: str) -> str:
         curr_symbol = book.default_currency.mnemonic
         for acc in sorted(matches, key=lambda x: x['fullname']):
             color = Fore.GREEN if acc['balance'] >= 0 else Fore.RED
-            output.append(f"{acc['fullname']} ({acc['type']}) - {color}{curr_symbol} {acc['balance']:,.2f}")
+            if acc['type'] == "STOCK":
+                output.append(f"{acc['fullname']} ({acc['type']}) - {color}{acc['balance']:,.2f} Units")
+            else:
+                output.append(f"{acc['fullname']} ({acc['type']}) - {color}{curr_symbol} {acc['balance']:,.2f}")
         
         log.debug(f"Search accounts completed for pattern: {pattern}")
 
