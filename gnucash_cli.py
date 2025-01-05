@@ -1999,20 +1999,20 @@ async def run_cli(book_name: str = None):
     )
     
     print(Fore.YELLOW + "Starting GnuCash CLI...")
-    commands = {
-        'create_book': 'Create a new sample GnuCash book',
-        'create_accounts': 'Create accounts from YAML file (file_path)',
-        'generate_reports': 'Generate financial reports',
-        'close_book': 'Close the current book',
-        'purge_backups': 'Purge old backups (book_name [--days N | --before YYYY-MM-DD])',
-        'save_template': 'Save current book as template without transactions (template_name)',
-        'set_currency': 'Set default currency (USD, EUR, etc)',
-        'get_currency': 'Get current default currency',
-        'set_accounts_currency': 'Set currency for all accounts (USD, EUR, etc)',
-        'search_accounts': 'Search accounts by name pattern (supports regex)',
-        'move_account': 'Move account to new parent (account_name new_parent_name)',
-        'help': 'Show this help message'
-    }
+    # commands = {
+    #     'create_book': 'Create a new sample GnuCash book',
+    #     'create_accounts': 'Create accounts from YAML file (file_path)',
+    #     'generate_reports': 'Generate financial reports',
+    #     'close_book': 'Close the current book',
+    #     'purge_backups': 'Purge old backups (book_name [--days N | --before YYYY-MM-DD])',
+    #     'save_template': 'Save current book as template without transactions (template_name)',
+    #     'set_currency': 'Set default currency (USD, EUR, etc)',
+    #     'get_currency': 'Get current default currency',
+    #     'set_accounts_currency': 'Set currency for all accounts (USD, EUR, etc)',
+    #     'search_accounts': 'Search accounts by name pattern (supports regex)',
+    #     'move_account': 'Move account to new parent (account_name new_parent_name)',
+    #     'help': 'Show this help message'
+    # }
     global active_book
     history = []
     
@@ -2023,14 +2023,14 @@ async def run_cli(book_name: str = None):
         history = history[-3:]
         print(result.data)
     
-    print(Fore.GREEN + "GnuCash CLI - Type 'quit' to exit")
-    print("Available commands:")
-    for cmd, desc in commands.items():
-        print(f"  {cmd} - {desc}")
-    if active_book:
-        print(f"Active book: {active_book}")
-    else:
-        print("No active book - create or open one to begin")
+    print(Fore.GREEN + "GnuCash CLI - Type 'quit' to exit, list tools to find out commands")
+    # print("Available commands:")
+    # for cmd, desc in commands.items():
+    #     print(f"  {cmd} - {desc}")
+    # if active_book:
+    #     print(f"Active book: {active_book}")
+    # else:
+    #     print("No active book - create or open one to begin")
 
     while True:
         try:
