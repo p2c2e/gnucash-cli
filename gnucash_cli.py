@@ -716,9 +716,8 @@ async def add_transaction(
     to_accounts: list[dict[str, Union[str, float]]],
     description: str = "Fund transfer"
 ) -> str:
-    log.debug(f"Entering add_transaction with from_account: {from_account}, to_accounts: {to_accounts}, description: {description}")
     """Add a transaction with multiple splits (one-to-many transfer).
-    
+
     Creates a double-entry transaction with:
     - Single debit from source account
     - Multiple credits to destination accounts
@@ -732,13 +731,14 @@ async def add_transaction(
             - 'account_name': Full name of destination account
             - 'amount': Positive amount to credit
         description (str): Description for the transaction
-        
+
     Returns - str: Success message with transaction details or error message
 
     Raises:
         ValueError: If accounts don't exist or amounts are invalid
         piecash.BookError: If transaction creation fails
     """
+    log.debug(f"Entering add_transaction with from_account: {from_account}, to_accounts: {to_accounts}, description: {description}")
     print(Fore.YELLOW + "DEBUG: Starting add_transaction")
 
     global active_book
@@ -804,25 +804,25 @@ async def add_transaction(
 
 @gnucash_agent.tool
 async def list_transactions(ctx: RunContext[GnuCashQuery], limit: int = 10) -> str:
-    log.debug(f"Entering list_transactions with limit: {limit}")
     """List recent transactions in the active GnuCash book.
-    
+
     Returns formatted transaction details including:
     - Date
     - Description
     - Splits showing account and amount
     - Memo (if present)
-    
+
     Transactions are sorted by date (newest first).
 
     Args:
         limit (int): Maximum number of transactions to return (default: 10)
-        
+
     Returns - str: Formatted list of transactions with splits or error message
 
     Raises:
         piecash.BookError: If book access fails
     """
+    log.debug(f"Entering list_transactions with limit: {limit}")
     global active_book
     if not active_book:
         return "No active book. Please create or open a book first."
@@ -869,15 +869,14 @@ async def list_transactions(ctx: RunContext[GnuCashQuery], limit: int = 10) -> s
 
 @gnucash_agent.tool
 async def generate_balance_sheet(ctx: RunContext[GnuCashQuery]) -> str:
-    log.debug("Entering generate_balance_sheet")
     """Generate an ASCII formatted balance sheet with proper account hierarchy and roll-up totals.
-    
+
     Implements bottom-up calculation of account balances with:
     - Proper parent/child roll-up totals
     - Hierarchical indentation
     - Subtotals at each level
     - Sign conventions maintained
-    
+
     All amounts are in the book's default currency.
 
     Returns - str: Formatted balance sheet or error message
@@ -885,6 +884,7 @@ async def generate_balance_sheet(ctx: RunContext[GnuCashQuery]) -> str:
     Raises:
         piecash.BookError: If book access fails
     """
+    log.debug("Entering generate_balance_sheet")
     global active_book
     if not active_book:
         return "No active book. Please create or open a book first."
@@ -1127,25 +1127,25 @@ async def purge_backups(
     days: int = None,
     before_date: str = None
 ) -> str:
-    log.debug(f"Entering purge_backups with book_name: {book_name}, days: {days}, before_date: {before_date}")
     """Purge old backup files for a GnuCash book.
-    
+
     Deletes backup files matching the pattern {book_name}.gnucash.YYYYMMDDHHMMSS.gnucash
     that are either:
     - Older than N days (if days parameter provided)
     - Older than a specific date (if before_date provided)
-    
+
     Args:
         book_name (str): Base name of the book (without .gnucash extension)
         days (int, optional): Delete backups older than this many days
         before_date (str, optional): Delete backups before this date (YYYY-MM-DD format)
-        
+
     Returns - str: Summary of deleted files and remaining backups
-        
+
     Raises:
         ValueError: If neither days nor before_date provided
         FileNotFoundError: If no backups found
     """
+    log.debug(f"Entering purge_backups with book_name: {book_name}, days: {days}, before_date: {before_date}")
 
     print(Fore.YELLOW + f"DEBUG: Starting purge_backups for {book_name}")
 
@@ -1302,19 +1302,21 @@ async def create_stock_sub_account(
         log.exception(e)
         return f"Error creating stock account: {str(e)}"
 
+@gnucash_agent.tool
 async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: str) -> str:
-    log.debug(f"Entering create_accounts_from_file with file_path: {file_path}")
-    """Create account hierarchy from a YAML file.
-    
+    """Create account hierarchy from a YAML file. This process is also called initialization. The user will provide
+    the names of the files to use. It should read and processed.
+
     Args:
         file_path (str): Path to YAML file containing account structure
-        
+
     Returns - str: Summary of created accounts and any errors
-        
+
     Raises:
         FileNotFoundError: If YAML file doesn't exist
         yaml.YAMLError: If YAML is invalid
     """
+    log.debug(f"Entering create_accounts_from_file with file_path: {file_path}")
     global active_book
     if not active_book:
         return "No active book. Please create or open a book first."
@@ -1506,14 +1508,14 @@ async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: st
 
 @gnucash_agent.tool
 async def get_default_currency(ctx: RunContext[GnuCashQuery]) -> str:
-    log.debug("Entering get_default_currency")
     """Get the default currency for the active book.
-    
+
     Returns - str: Current default currency code or error message
-        
+
     Raises:
         ValueError: If no active book
     """
+    log.debug("Entering get_default_currency")
     global active_book
     if not active_book:
         return "No active book. Please create or open a book first."
@@ -1530,18 +1532,18 @@ async def get_default_currency(ctx: RunContext[GnuCashQuery]) -> str:
 
 @gnucash_agent.tool
 async def set_accounts_currency(ctx: RunContext[GnuCashQuery], currency_code: str) -> str:
-    log.debug(f"Entering set_accounts_currency with currency_code: {currency_code}")
     """Set the currency for all accounts in the active book.
-    
+
     Args:
         currency_code (str): Three-letter ISO currency code (e.g., 'USD', 'EUR', 'GBP')
-        
+
     Returns - str: Success message or error details
-        
+
     Raises:
         ValueError: If no active book or invalid currency code
         piecash.BookError: If currency change fails
     """
+    log.debug(f"Entering set_accounts_currency with currency_code: {currency_code}")
     global active_book
     if not active_book:
         return "No active book. Please create or open a book first."
@@ -1577,18 +1579,18 @@ async def set_accounts_currency(ctx: RunContext[GnuCashQuery], currency_code: st
 
 @gnucash_agent.tool
 async def set_accounts_precision(ctx: RunContext[GnuCashQuery], precision: int = 1000) -> str:
-    log.debug(f"Entering set_accounts_precision with precision: {precision}")
     """Set the precision (number of decimal places) for all non-top-level accounts.
-    
+
     Args:
         precision (int): Number of decimal places to set (default: 1000)
-        
+
     Returns - str: Success message or error details
-        
+
     Raises:
         ValueError: If no active book or invalid precision
         piecash.BookError: If precision change fails
     """
+    log.debug(f"Entering set_accounts_precision with precision: {precision}")
     global active_book
     if not active_book:
         return "No active book. Please create or open a book first."
@@ -1623,18 +1625,18 @@ async def set_accounts_precision(ctx: RunContext[GnuCashQuery], precision: int =
 
 @gnucash_agent.tool
 async def set_default_currency(ctx: RunContext[GnuCashQuery], currency_code: str) -> str:
-    log.debug(f"Entering set_default_currency with currency_code: {currency_code}")
     """Set the default currency for the active book.
-    
+
     Args:
         currency_code (str): Three-letter ISO currency code (e.g., 'USD', 'EUR', 'GBP')
-        
+
     Returns - str: Success message or error details
-        
+
     Raises:
         ValueError: If no active book or invalid currency code
         piecash.BookError: If currency change fails
     """
+    log.debug(f"Entering set_default_currency with currency_code: {currency_code}")
     global active_book
     if not active_book:
         return "No active book. Please create or open a book first."
@@ -1665,25 +1667,25 @@ async def set_default_currency(ctx: RunContext[GnuCashQuery], currency_code: str
 
 @gnucash_agent.tool
 async def save_as_template(ctx: RunContext[GnuCashQuery], template_name: str) -> str:
-    log.debug(f"Entering save_as_template with template_name: {template_name}")
     """Save current book as a template by copying account structure without transactions.
-    
+
     Creates a new GnuCash file with:
     - All accounts from current book
     - Same currency settings
     - No transactions
     - No scheduled transactions
     - Preserves account hierarchies and properties
-    
+
     Args:
         template_name (str): Name for the template file (without .gnucash extension)
-        
+
     Returns - str: Success message or error details
-        
+
     Raises:
         ValueError: If no active book or invalid template name
         piecash.BookError: If template creation fails
     """
+    log.debug(f"Entering save_as_template with template_name: {template_name}")
     global active_book
     if not active_book:
         return "No active book. Please create or open a book first."
@@ -1752,14 +1754,13 @@ async def add_stock_transaction(
     credit_account: str = None,
     stock_account: str = "Assets:Investments:Stocks"
 ) -> str:
-    log.debug("Entering add_stock_transaction")
     """Add a stock purchase or sale transaction.
-    
+
     Creates a double-entry transaction with:
     - For purchases: Debit stock account, credit the specified account
     - For sales: Debit the specified account, credit stock account
     - Includes commission as an expense
-    
+
     Args:
         stock_symbol (str): Stock ticker symbol (e.g. AAPL)
         transaction_date (str): Date in YYYY-MM-DD format
@@ -1768,13 +1769,14 @@ async def add_stock_transaction(
         commission (float, optional): Commission/fees amount
         credit_account (str): Full name of account to credit/debit (this not provided, it will be inferred as the stocks parent account)
         stock_account (str): Full name of stock account (default: Assets:Investments:Stocks)
-        
+
     Returns - str: Success message or error details
-    
+
     Raises:
         ValueError: If accounts don't exist or amounts are invalid
         piecash.BookError: If transaction creation fails
     """
+    log.debug("Entering add_stock_transaction")
     global active_book
     if not active_book:
         return "No active book. Please create or open a book first."
@@ -1940,20 +1942,20 @@ async def add_stock_transaction(
 
 @gnucash_agent.tool
 async def search_accounts(ctx: RunContext[GnuCashQuery], pattern: str) -> str:
-    log.debug(f"Entering search_accounts with pattern: {pattern}")
     """Search for accounts matching a name pattern (supports regex).
-    
+
     Args:
         pattern (str): Account name pattern to search for (case-insensitive)
                       Supports partial matches and regex patterns
-                      
+
     Returns - str: List of matching accounts with full paths or error message
-    
+
     Examples:
         search_accounts checking  -> Finds accounts containing "checking"
         search_accounts ^ass     -> Finds accounts starting with "ass"
         search_accounts .*card$  -> Finds accounts ending with "card"
     """
+    log.debug(f"Entering search_accounts with pattern: {pattern}")
     global active_book
     if not active_book:
         return "No active book. Please create or open a book first."
@@ -2006,26 +2008,26 @@ async def search_accounts(ctx: RunContext[GnuCashQuery], pattern: str) -> str:
 
 @gnucash_agent.tool
 async def move_account(ctx: RunContext[GnuCashQuery], account_name: str, new_parent_name: str) -> str:
-    log.debug(f"Entering move_account with account_name: {account_name}, new_parent_name: {new_parent_name}")
     """Move an account to a new parent account.
-    
+
     Verifies account type compatibility before moving:
     - ASSET accounts can only be under ASSET parents
     - LIABILITY accounts can only be under LIABILITY parents
     - INCOME accounts can only be under INCOME parents
     - EXPENSE accounts can only be under EXPENSE parents
     - EQUITY accounts can only be under EQUITY parents
-    
+
     Args:
         account_name (str): Full name of account to move
         new_parent_name (str): Full name of new parent account
-        
+
     Returns - str: Success message or error details
-    
+
     Raises:
         ValueError: If accounts don't exist or types are incompatible
         piecash.BookError: If move operation fails
     """
+    log.debug(f"Entering move_account with account_name: {account_name}, new_parent_name: {new_parent_name}")
     global active_book
     if not active_book:
         return "No active book. Please create or open a book first."
@@ -2066,24 +2068,24 @@ async def move_account(ctx: RunContext[GnuCashQuery], account_name: str, new_par
         return f"Error moving account: {str(e)}"
 
 async def export_reports_pdf(ctx: RunContext[GnuCashQuery], output_file: str = "gnucash_reports.pdf") -> str:
-    log.debug(f"Entering export_reports_pdf with output_file: {output_file}")
     """Export all financial reports to a single PDF file.
-    
+
     Generates and combines:
     - Balance Sheet
     - Cash Flow Statement
     - Account Listing
     - Recent Transactions
-    
+
     Args:
         output_file (str): Name of PDF file to create (default: gnucash_reports.pdf)
-        
+
     Returns - str: Success message or error details
-    
+
     Raises:
         piecash.BookError: If book access fails
         reportlab.Error: If PDF generation fails
     """
+    log.debug(f"Entering export_reports_pdf with output_file: {output_file}")
     global active_book
     if not active_book:
         return "No active book. Please create or open a book first."
@@ -2308,9 +2310,8 @@ class BackupScheduler:
                 print(Fore.RED + f"Error processing backup file {filepath}: {e}")
 
 async def generate_reports(ctx: RunContext[GnuCashQuery]) -> str:
-    log.debug("Entering generate_reports")
     """Generate standard financial reports from the GnuCash book.
-    
+
     Includes:
     - Account balances
     - Transaction history
@@ -2321,6 +2322,7 @@ async def generate_reports(ctx: RunContext[GnuCashQuery]) -> str:
     Raises:
         piecash.BookError: If book access fails
     """
+    log.debug("Entering generate_reports")
     global active_book
     if not active_book:
         return "No active book. Please create or open a book first."
@@ -2349,12 +2351,12 @@ async def generate_reports(ctx: RunContext[GnuCashQuery]) -> str:
 
 
 async def run_cli(book_name: str = None):
-    log.debug(f"Entering run_cli with book_name: {book_name}")
     """Run the GnuCash CLI interface.
-    
+
     Args:
         book_name (str, optional): Name of book to open at startup
     """
+    log.debug(f"Entering run_cli with book_name: {book_name}")
     # Set up periodic backup sweeper
     sweep_interval = int(os.getenv('GC_CLI_SWEEP_SECS', '120'))
     sweep_age = int(os.getenv('GC_CLI_SWEEP_AGE_MINS', '5'))
