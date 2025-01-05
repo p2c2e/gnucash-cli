@@ -801,7 +801,7 @@ async def create_stock_sub_account(
     ticker_symbol: str,
     account_name: str = None,
     account_type: str = "STOCK", # Should be 'STOCK'
-    parent_path: str = "Assets:Investments",
+    parent_path: str = None, # "Assets:Investments",
     namespace: str = None,
     initial_price: float = None,
     description: str = None
@@ -811,7 +811,7 @@ async def create_stock_sub_account(
     Args:
         ticker_symbol: Stock ticker symbol (e.g., 'AAPL')
         account_name: Name for the account (defaults to ticker symbol if None)
-        parent_path: Path to parent account (default: "Assets:Investments")
+        parent_path: Path to parent account : Ask the user if not provided with this
         namespace: Stock exchange namespace (e.g., 'NASDAQ', 'NYSE')
         initial_price: Initial price per share
         description: Account description
@@ -839,11 +839,15 @@ async def create_stock_sub_account(
         log.debug(f"Creating stock account: {account_name} ({namespace}:{ticker_symbol})")
         
         # First ensure the commodity (stock) exists
+        create_commodity = False
         try:
             stock = book.commodities(namespace=namespace, mnemonic=ticker_symbol)
             log.debug(f"Found existing stock commodity: {stock.mnemonic}")
         except KeyError:
             # Create new stock commodity if it doesn't exist
+            create_commodity = True
+
+        if create_commodity:
             log.debug(f"Creating new stock commodity: {ticker_symbol}")
             stock = piecash.Commodity(
                 namespace=namespace,
@@ -855,14 +859,19 @@ async def create_stock_sub_account(
             book.save()
             log.debug(f"Created new stock commodity: {stock.mnemonic}")
             
-        # Ensure parent account exists
+        # Check if stock account already exists
+        try:
+            existing_account = book.accounts.get(fullname=f"{parent_path}:{account_name}")
+            log.debug(f"Stock account already exists: {existing_account.fullname}")
+            return f"Stock account already exists: {existing_account.fullname}"
+        except KeyError:
+            pass
+
+        # Find parent account
         try:
             parent = book.accounts.get(fullname=parent_path)
-            if not parent:
-                log.error(f"Parent account not found: {parent_path}")
-                raise KeyError(f"Parent account not found: {parent_path}")
         except KeyError:
-            book.close()
+            log.error(f"Parent account not found: {parent_path}")
             return f"Parent account path {parent_path} does not exist"
             
         # Create the stock account
@@ -881,8 +890,8 @@ async def create_stock_sub_account(
             # Set initial price if provided
             if initial_price is not None:
                 # log.debug(f"Setting initial price: {initial_price}")
-                if initial_price == 0.0:
-                    initial_price = 0.01
+                # if initial_price == 0.0:
+                #     initial_price = 0.01
                 #
                 # stock.update_prices([{
                 #     "datetime": datetime.now(),
@@ -891,7 +900,7 @@ async def create_stock_sub_account(
                 # }])
                 set_commodity_price(book, "NSE", stock.mnemonic,
                                     book.default_currency.mnemonic,
-                                    Decimal(initial_price), datetime.now())
+                                    Decimal(str(initial_price)), datetime.now())
                 
             book.save()
             
@@ -902,6 +911,19 @@ async def create_stock_sub_account(
     except Exception as e:
         log.exception(e)
         return f"Error creating stock account: {str(e)}"
+
+
+@gnucash_agent.tool
+async def create_currencies(ctx):
+
+    """
+    Create basic currencies (INR, GBP, EUR, USD) if they don't exist.
+    """
+    log.debug("Entering create_currencies method")
+    book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=False)
+    ensure_basic_currencies(book)
+    book.close()
+    log.debug("Exiting create_currencies ...")
 
 def ensure_basic_currencies(book):
     """
@@ -915,45 +937,52 @@ def ensure_basic_currencies(book):
     """
     log.debug("Entering ensure_basic_currencies method")
 
-    # Currency definitions
-    currencies = {
-        "INR": {"fullname": "Indian Rupee", "fraction": 100},
-        "GBP": {"fullname": "British Pound", "fraction": 100},
-        "EUR": {"fullname": "Euro", "fraction": 100},
-        "USD": {"fullname": "US Dollar", "fraction": 100}
-    }
+    with book:
+        # Currency definitions
+        currencies = {
+            "INR": {"fullname": "Indian Rupee", "fraction": 100},
+            "GBP": {"fullname": "British Pound", "fraction": 100},
+            "EUR": {"fullname": "Euro", "fraction": 100},
+            "USD": {"fullname": "US Dollar", "fraction": 100}
+        }
 
-    currency_objects = {}
+        currency_objects = {}
 
-    try:
-        for mnemonic, details in currencies.items():
-            try:
-                # Try to get existing currency
-                currency = book.commodities(namespace="CURRENCY", mnemonic=mnemonic)
-                log.debug(f"Found existing currency {mnemonic}")
-            except KeyError:
-                # Currency doesn't exist, create it
-                currency = Commodity(namespace="CURRENCY",
-                                     mnemonic=mnemonic,
-                                     fullname=details["fullname"],
-                                     fraction=details["fraction"],
-                                     book=book)
-                book.flush()
-                log.debug(f"Created new currency {mnemonic}")
+        try:
+            for mnemonic, details in currencies.items():
+                create_commodity = False
+                try:
+                    # Try to get existing currency
+                    currency = book.commodities(namespace="CURRENCY", mnemonic=mnemonic)
+                    log.debug(f"Found existing currency {mnemonic}")
+                except KeyError:
+                    # Currency doesn't exist, create it
+                    log.debug(f"Did not find currency {mnemonic}")
+                    create_commodity = True
 
-            currency_objects[mnemonic] = currency
-        log.debug(currency_objects)
+                if create_commodity:
+                    log.debug(f"Creating new currency {mnemonic}")
+                    currency = Commodity(namespace="CURRENCY",
+                                         mnemonic=mnemonic,
+                                         fullname=details["fullname"],
+                                         fraction=details["fraction"],
+                                         book=book)
+                    # book.flush()
+                    log.debug(f"Created new currency {mnemonic}")
 
-        book.save()
-        log.debug("All basic currencies ensured")
-        return currency_objects
+                currency_objects[mnemonic] = currency
+            log.debug(currency_objects)
 
-    except Exception as e:
-        log.exception(f"Failed to ensure basic currencies: {str(e)}")
-        raise
+            book.save()
+            log.debug("All basic currencies ensured")
+            return currency_objects
 
-    finally:
-        log.debug("Exiting ensure_basic_currencies ...")
+        except Exception as e:
+            log.exception(f"Failed to ensure basic currencies: {str(e)}")
+            raise
+
+        finally:
+            log.debug("Exiting ensure_basic_currencies ...")
 
 def set_commodity_price(book, namespace, commodity_mnemonic, currency_mnemonic, price_value, price_date):
     """
@@ -1055,10 +1084,14 @@ async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: st
                         if acc.get('type', '').upper() == "STOCK":
                             print(Fore.YELLOW + f"DEBUG: Creating stock account: {acc['name']}")
                             namespace = acc.get('namespace', os.getenv('GC_CLI_COMMODITY_NAMESPACE', 'NSE'))
+                            create_commodity = False
                             try:
                                 stock_commodity = book.commodities(namespace=namespace, mnemonic=acc['name'])
                                 print(Fore.YELLOW + f"DEBUG: Found existing commodity: {stock_commodity.mnemonic}")
                             except KeyError:
+                                create_commodity = True
+
+                            if create_commodity:
                                 print(Fore.YELLOW + f"DEBUG: Creating new commodity: {acc['name']} in namespace {namespace}")
                                 stock_commodity = piecash.Commodity(
                                     namespace=namespace,
@@ -1073,7 +1106,7 @@ async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: st
                                                     "NSE",
                                                     stock_commodity.mnemonic,
                                                     book.default_currency.mnemonic,
-                                                    Decimal(acc.get('initial_price', 0.0)),
+                                                    Decimal(str(acc.get('initial_price', 0.0))),
                                                     datetime.now())
 
                             new_acc = Account(
@@ -1440,7 +1473,7 @@ async def add_stock_transaction(
     price: float,
     commission: float = 0.0,
     credit_account: str = None,
-    stock_account: str = "Assets:Investments:Stocks"
+    stock_account: str = None, # "Assets:Investments:Stocks"
 ) -> str:
     """Add a stock purchase or sale transaction.
 
@@ -1456,7 +1489,7 @@ async def add_stock_transaction(
         price (float): Price per unit
         commission (float, optional): Commission/fees amount
         credit_account (str): Full name of account to credit/debit (this not provided, it will be inferred as the stocks parent account)
-        stock_account (str): Full name of stock account (default: Assets:Investments:Stocks)
+        stock_account (str): Full name of stock account
 
     Returns - str: Success message or error details
 
@@ -1464,185 +1497,127 @@ async def add_stock_transaction(
         ValueError: If accounts don't exist or amounts are invalid
         piecash.BookError: If transaction creation fails
     """
-    log.debug("Entering add_stock_transaction")
-    # global active_book
+    # Entering add_stock_transaction            STOCKA              2023-10-04    100.0   123.45   0.0       Assets:Investments:ICICIDirect Assets:Investments:ICICIDirect:Stocks:STOCKA
+
+    log.debug(f"Entering add_stock_transaction {stock_symbol} {transaction_date} {units} {price} {commission} {credit_account} {stock_account}")
+
     if not get_active_book():
         return "No active book. Please create or open a book first."
-    
+
     try:
         log.debug(f"Starting stock transaction for {stock_symbol}")
-        log.debug(f"Stock transaction inputs: units: {units}, price: {price}, commission: {commission}")
-        
+
         # Convert inputs
-        log.debug(f"Parsing transaction date: {transaction_date}")
         transaction_date = datetime.strptime(transaction_date, '%Y-%m-%d').date()
-        log.debug(f"Parsed transaction date: {transaction_date}")
-        
         total_amount = abs(units) * price
         is_purchase = units > 0
-        log.debug(f"Calculated transaction totals: total amount: {total_amount}, is purchase: {is_purchase}")
-        
-        log.debug(f"Opening book: {get_active_book()}")
+
         book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=False)
-        log.debug("Book opened successfully")
-        
+
         # Find the stock account
-        log.debug(f"Looking for stock account: {stock_account}")
         stock_acc = book.accounts.get(fullname=stock_account)
         if not stock_acc:
-            print(Fore.RED + f"DEBUG: Stock account not found: {stock_account}")
             book.close()
             return f"Stock account '{stock_account}' not found."
-        log.debug(f"Found stock account: {stock_acc.fullname}")
-            
-        # If credit account not specified, use stock account's parent
+
+        # Handle credit account
         if credit_account is None:
-            log.debug("Using stock parent as credit account")
             if not stock_acc.parent:
-                print(Fore.RED + f"DEBUG: Stock account has no parent: {stock_acc.fullname}")
                 book.close()
-                return f"Stock account '{stock_account}' has no parent account to use as default credit account"
+                return f"Stock account '{stock_acc.fullname}' has no parent account to use as default credit account"
             credit_acc = stock_acc.parent
-            log.debug(f"Using parent as credit account: {credit_acc.fullname}")
         else:
-            log.debug(f"Looking for credit account: {credit_account}")
-            credit_acc = book.accounts.get(fullname=credit_account)
-            if not credit_acc:
-                print(Fore.RED + f"DEBUG: Credit account not found: {credit_account}")
+            try:
+                credit_acc = book.accounts.get(fullname=credit_account)
+            except:
                 book.close()
                 return f"Credit account '{credit_account}' not found."
-            log.debug(f"Found credit account: {credit_acc.fullname}")
-        
-        # Create the transaction
-        log.debug("Creating transaction splits")
-        with book:
-            splits = []
-            
-            if is_purchase:
-                log.debug("Creating purchase transaction")
-                # Create splits with proper quantity tracking
-                stock_split = Split(
-                    account=stock_acc,
-                    value=Decimal(total_amount + commission),
-                    quantity=Decimal(abs(units)),  # Number of shares
-                    memo=f"Buy {abs(units)} {stock_symbol} @ {price}"
-                )
-                log.debug(f"Created stock split: {stock_split}")
-                splits.append(stock_split)
-                    
-                credit_split = Split(
-                    account=credit_acc,
-                    value=Decimal(-(total_amount + commission)),
-                    quantity=Decimal(-(total_amount + commission))  # Cash amount
-                )
-                log.debug(f"Created credit split: {credit_split}")
-                splits.append(credit_split)
-                    
-                # # Update the price database
-                # print(Fore.YELLOW + f"DEBUG: Updating price database for {stock_symbol}")
-                # stock_acc.commodity.update_prices([
-                #     {
-                #         "datetime": datetime.now(),
-                #         "value": Decimal(price),
-                #         "currency": book.default_currency
-                #     }
-                # ])
-            else:
-                log.debug("Creating sale transaction")
-                # Create splits with proper quantity tracking
-                credit_split = Split(
-                    account=credit_acc,
-                    value=Decimal(total_amount - commission),
-                    quantity=Decimal(total_amount - commission),  # Cash amount
-                    memo=f"Sell {abs(units)} {stock_symbol} @ {price}"
-                )
-                log.debug(f"Created credit split: {credit_split}")
-                splits.append(credit_split)
-                    
-                stock_split = Split(
-                    account=stock_acc,
-                    value=Decimal(-(total_amount - commission)),
-                    quantity=Decimal(-abs(units))  # Number of shares
-                )
-                log.debug(f"Created stock split: {stock_split}")
-                splits.append(stock_split)
-                    
-                # Update the price database
-                # print(Fore.YELLOW + f"DEBUG: Updating price database for {stock_symbol}")
-                # stock_acc.commodity.update_prices([
-                #     {
-                #         "datetime": datetime.now(),
-                #         "value": price,
-                #         "currency": book.default_currency
-                #     }
-                # ])
 
-                set_commodity_price(book, "NSE", stock_acc.commodity.mnemonic,
-                                    book.default_currency.mnemonic,
-                                    Decimal(price), datetime.now())
-            
-            if commission > 0:
-                log.debug(f"Adding commission split: {commission}")
-                # Add commission as expense
+        # Handle commission account
+        commission_acc = None
+        if commission > 0:
+            try:
                 commission_acc = book.accounts.get(fullname="Expenses:Commissions")
-                if not commission_acc:
-                    log.debug("Creating commissions account")
-                    commission_acc = Account(
-                        name="Commissions",
-                        type="EXPENSE",
-                        commodity=book.default_currency,
-                        parent=book.accounts.get(fullname="Expenses"),
-                        description="Trading commissions and fees"
-                    )
-                    log.debug(f"Created commission account: {commission_acc.fullname}")
-                
-                commission_split = Split(
-                    account=commission_acc,
-                    value=Decimal(commission),
-                    memo=f"{stock_symbol} trade commission"
+            except:
+                commission_acc = Account(
+                    name="Commissions",
+                    type="EXPENSE",
+                    commodity=book.default_currency,
+                    parent=book.accounts.get(fullname="Expenses"),
+                    description="Trading commissions and fees"
                 )
-                log.debug(f"Created commission split: {commission_split}")
-                splits.append(commission_split)
-            
-            # Print transaction details
-            print("\nTransaction Details:")
-            print("-" * 50)
-            for split in splits:
-                color = Fore.GREEN if split.value >= 0 else Fore.RED
-                print(f"Account: {split.account.fullname}")
-                print(f"Value: {color}{split.value:,.2f}{Fore.RESET}")
-                if hasattr(split, 'quantity') and split.quantity != split.value:
-                    print(f"Quantity: {color}{split.quantity:,.3f}{Fore.RESET}")
-                if split.memo:
-                    print(f"Memo: {split.memo}")
-                print("-" * 25)
 
-            log.debug("Creating transaction object")
+        with book:
+            # First create the transaction
             transaction = Transaction(
                 currency=book.default_currency,
                 description=f"{'Buy' if is_purchase else 'Sell'} {abs(units)} {stock_symbol} @ {price}",
-                splits=splits,
                 post_date=transaction_date,
                 enter_date=datetime.now(),
             )
-            log.debug(f"Created transaction: {transaction}")
-            
-            log.debug("Saving book")
+
+            # Now create and add splits to the transaction
+            if is_purchase:
+                Split(
+                    account=stock_acc,
+                    value=Decimal(f"{total_amount + commission}"),
+                    quantity=Decimal(f"{abs(units)}"),
+                    transaction=transaction,
+                    memo=f"Buy {abs(units)} {stock_symbol} @ {price}"
+                )
+
+                Split(
+                    account=credit_acc,
+                    value=Decimal(f"{-(total_amount + commission)}"),
+                    quantity=Decimal(f"{-(total_amount + commission)}"),
+                    transaction=transaction
+                )
+            else:
+                Split(
+                    account=credit_acc,
+                    value=Decimal(f"{total_amount - commission}"),
+                    quantity=Decimal(f"{total_amount - commission}"),
+                    transaction=transaction,
+                    memo=f"Sell {abs(units)} {stock_symbol} @ {price}"
+                )
+
+                Split(
+                    account=stock_acc,
+                    value=Decimal(f"{-(total_amount - commission)}"),
+                    quantity=Decimal(f"{-abs(units)}"),
+                    transaction=transaction
+                )
+
+            if commission > 0:
+                Split(
+                    account=commission_acc,
+                    value=Decimal(commission),
+                    transaction=transaction,
+                    memo=f"{stock_symbol} trade commission"
+                )
+
+            # Update price database
+            set_commodity_price(
+                book,
+                "NSE",
+                stock_acc.commodity.mnemonic,
+                book.default_currency.mnemonic,
+                Decimal(str(price)),
+                transaction_date
+            )
+
             book.save()
-            print(Fore.YELLOW + "DEBUG: Book saved successfully")
-        
-        log.debug("Closing book")
+
         book.close()
-        log.debug("Book closed successfully")
-        
+
         action = "purchased" if is_purchase else "sold"
         result = (f"Successfully {action} {abs(units)} shares of {stock_symbol} "
-                 f"at {price} on {transaction_date} for total {total_amount:.2f} "
-                 f"(commission: {commission:.2f})")
-        log.debug(f"Stock transaction completed: {result}")
+                  f"at {price} on {transaction_date} for total {total_amount:.2f} "
+                  f"(commission: {commission:.2f})")
         return result
-    
+
     except Exception as e:
+        log.debug(f"Error adding stock transaction {str(e)}")
         return f"Error adding stock transaction: {str(e)}"
 
 @gnucash_agent.tool
@@ -1660,6 +1635,7 @@ async def search_accounts(ctx: RunContext[GnuCashQuery], pattern: str) -> str:
         search_accounts ^ass     -> Finds accounts starting with "ass"
         search_accounts .*card$  -> Finds accounts ending with "card"
     """
+    # pattern = pattern.replace(":", r"\:")
     log.debug(f"Entering search_accounts with pattern: {pattern}")
     # global active_book
     if not get_active_book():
@@ -1684,7 +1660,8 @@ async def search_accounts(ctx: RunContext[GnuCashQuery], pattern: str) -> str:
         # Search for matching accounts
         matches = []
         for account in book.accounts:
-            if account.type != "ROOT" and regex.search(account.name):
+            # log.debug(f"Checking {account.fullname}")
+            if account.type != "ROOT" and regex.search(account.fullname):
                 matches.append({
                     'fullname': account.fullname,
                     'type': account.type,
@@ -1694,6 +1671,7 @@ async def search_accounts(ctx: RunContext[GnuCashQuery], pattern: str) -> str:
 
         if not matches:
             book.close()
+            log.debug(f"No accounts found matching pattern: {pattern}")
             return f"No accounts found matching pattern: {pattern}"
         
         # Format results
@@ -1712,6 +1690,7 @@ async def search_accounts(ctx: RunContext[GnuCashQuery], pattern: str) -> str:
         return "\n".join(output)
         
     except Exception as e:
+        log.debug(f"Error searching accounts: {str(e)}")
         return f"Error searching accounts: {str(e)}"
 
 @gnucash_agent.tool
@@ -1749,15 +1728,18 @@ async def move_account(ctx: RunContext[GnuCashQuery], account_name: str, new_par
         
         if not account:
             book.close()
+            log.debug(f"Account '{account_name}' not found.")
             return f"Account '{account_name}' not found."
         if not new_parent:
             book.close()
+            log.debug(f"New parent account '{new_parent_name}' not found.")
             return f"New parent account '{new_parent_name}' not found."
             
         # Check type compatibility
         if account.type != "ROOT" and new_parent.type != "ROOT":
             if account.type != new_parent.type:
                 book.close()
+                log.debug(f"Cannot move {account.type} account under {new_parent.type} parent.")
                 return f"Cannot move {account.type} account under {new_parent.type} parent."
         
         # Store old parent name for message
@@ -2303,6 +2285,67 @@ async def list_tools(ctx):
 
 
 @gnucash_agent.tool
+async def delete_account(ctx: RunContext[GnuCashQuery], account_name: str) -> str:
+    """Delete an account and all its associated transactions.
+
+    WARNING: This is a destructive operation that cannot be undone! Double check with the user before calling
+    The function will:
+    1. Find all transactions involving the account
+    2. Delete those transactions
+    3. Delete the account itself
+    4. Verify no orphaned data remains
+
+    Args:
+        account_name (str): Full name of account to delete (e.g. "Assets:Checking")
+
+    Returns - str: Success message or error details
+
+    Raises:
+        ValueError: If account doesn't exist or has child accounts
+        piecash.BookError: If deletion fails
+    """
+    log.debug(f"Entering delete_account with account_name: {account_name}")
+    if not get_active_book():
+        return "No active book. Please create or open a book first."
+
+    try:
+        book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=False)
+        
+        # Find the account
+        try:
+            account = book.accounts.get(fullname=account_name)
+        except KeyError:
+            book.close()
+            return f"Account '{account_name}' not found."
+
+        # Check for child accounts
+        if account.children:
+            book.close()
+            return f"Cannot delete account '{account_name}' because it has child accounts. Delete children first."
+
+        # Find all transactions involving this account
+        affected_transactions = set()
+        for split in account.splits:
+            affected_transactions.add(split.transaction)
+
+        # Delete transactions and account within a single transaction
+        with book:
+            # Delete all affected transactions
+            for transaction in affected_transactions:
+                log.debug(f"Deleting transaction: {transaction.description}")
+                book.delete(transaction)
+
+            # Delete the account itself
+            log.debug(f"Deleting account: {account.fullname}")
+            book.delete(account)
+            book.save()
+
+        book.close()
+        return f"Successfully deleted account '{account_name}' and {len(affected_transactions)} associated transactions."
+
+    except Exception as e:
+        return f"Error deleting account: {str(e)}"
+
 async def add_dummy_accounts(ctx: RunContext[GnuCashQuery]) -> str:
     """Add dummy accounts and transactions to the active GnuCash book for testings...
     Use this tool when the user asks for Dummy or Sample or Test account creation or addition.
@@ -2498,7 +2541,19 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description='GnuCash CLI')
     parser.add_argument('--book', type=str, help='Name of GnuCash book to open')
+    parser.add_argument('--test', action='store_true', help='Run test function and exit')
     args = parser.parse_args()
+
+    if args.test:
+        def do_test():
+            print("Running test function...")
+            # open the book mentioned in --book argument
+            book = piecash.open_book(args.book, open_if_lock=True, readonly=False)
+            set_active_book(args.book)
+            asyncio.run(add_stock_transaction(None, "STOCKA", "2023-10-04", 100.0, 123.45, 0.0, "Assets:Investments:ICICIDirect", "Assets:Investments:ICICIDirect:Stocks:STOCKA"))
+            print("Test completed.")
+        do_test()
+        sys.exit(0)
     
     # Get or create an event loop
     try:
