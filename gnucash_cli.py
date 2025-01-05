@@ -87,19 +87,9 @@ log.info(f"Agent created with system prompt: {system_prompt}")
 
 @gnucash_agent.tool
 async def create_book(ctx: RunContext[GnuCashQuery], book_name: str = "sample_accounts") -> str:
-    """Create a new GnuCash book with sample accounts and transactions.
+    """Create a new GnuCash book and set it as the active book.
     
-    This creates a new SQLite-based GnuCash book with standard account types:
-    - Assets (with Checking and Savings accounts)
-    - Liabilities (with Credit Card account)
-    - Income (with Salary account)
-    - Expenses (with Groceries and Utilities accounts)
-    
-    Also creates sample transactions demonstrating:
-    - Initial deposit
-    - Savings transfer
-    - Expense payments
-    - Credit card payments
+    This creates a new SQLite-based GnuCash book.
 
     Args:
         book_name (str): Name of the book to create (without .gnucash extension)
@@ -122,57 +112,10 @@ async def create_book(ctx: RunContext[GnuCashQuery], book_name: str = "sample_ac
             currency=DEFAULT_CURRENCY,
             keep_foreign_keys=False
         )
-        log.info(f"Book created: {get_active_book()}")
-        
-        with book:
-            # Create main account categories
-            assets = Account(
-                name="Assets",
-                type="ASSET",
-                commodity=book.default_currency,
-                parent=book.root_account,
-                description="Asset accounts"
-            )
-            
-            expenses = Account(
-                name="Expenses",
-                type="EXPENSE",
-                commodity=book.default_currency,
-                parent=book.root_account,
-                description="Expense accounts"
-            )
-            
-            income = Account(
-                name="Income",
-                type="INCOME",
-                commodity=book.default_currency,
-                parent=book.root_account,
-                description="Income accounts"
-            )
-            
-            liabilities = Account(
-                name="Liabilities",
-                type="LIABILITY",
-                commodity=book.default_currency,
-                parent=book.root_account,
-                description="Liability accounts"
-            )
-            
-            # Create Equity account
-            equity = Account(
-                name="Equity",
-                type="EQUITY",
-                commodity=book.default_currency,
-                parent=book.root_account,
-                description="Equity accounts"
-            )
-
-            # Create sub-accounts and transactions (omitted for brevity, same as testcase.py)
-            # ... (include all account and transaction creation code from testcase.py)
-
-            book.save()
+        set_active_book(active_book)
+        log.info(f"Book created and set as active: {get_active_book()}")
         log.debug(f"Create book completed: {book_name}")
-        return "Successfully created sample GnuCash book with accounts and transactions."
+        return "Successfully created a new GnuCash book."
     
     except Exception as e:
         return Fore.RED + f"Error creating book: {str(e)}"
@@ -1092,168 +1035,153 @@ async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: st
         def create_accounts(accounts, parent=None):
             print(Fore.YELLOW + f"DEBUG: Processing {len(accounts)} accounts under parent: {parent.fullname if parent else 'root'}")
             
-            # Process all accounts first, then save once at the end
-            accounts_to_create = []
             for acc in accounts:
                 try:
                     # Check if account already exists
                     fullname = f"{parent.fullname}:{acc['name']}" if parent else acc['name']
-                    accounts_to_create.append((acc, fullname))
-                except Exception as e:
-                    results.append(f"Error preparing account {acc.get('name', '')}: {str(e)}")
-                    continue
+                    existing = next(
+                        (a for a in book.accounts
+                         if a.name == acc['name'] and
+                         (parent is None or a.parent == parent)),
+                        None
+                    )
 
-            # print("BEFORE ...........")
-            # # Now create accounts in a fresh session
-            # # with book:
-            # for acc, fullname in accounts_to_create:
-            #     print(acc)
-            #     print(fullname)
-            # print("WITHIN ..........")
+                    if existing:
+                        print(Fore.YELLOW + f"DEBUG: Account already exists: {fullname} - checking for children")
+                        results.append(f"Account already exists: {fullname} - checking for children")
+                        new_acc = existing
+                    else:
+                        # Handle stock accounts differently
+                        if acc.get('type', '').upper() == "STOCK":
+                            print(Fore.YELLOW + f"DEBUG: Creating stock account: {acc['name']}")
+                            namespace = acc.get('namespace', os.getenv('GC_CLI_COMMODITY_NAMESPACE', 'NSE'))
+                            try:
+                                stock_commodity = book.commodities(namespace=namespace, mnemonic=acc['name'])
+                                print(Fore.YELLOW + f"DEBUG: Found existing commodity: {stock_commodity.mnemonic}")
+                            except KeyError:
+                                print(Fore.YELLOW + f"DEBUG: Creating new commodity: {acc['name']} in namespace {namespace}")
+                                stock_commodity = piecash.Commodity(
+                                    namespace=namespace,
+                                    mnemonic=acc['name'],
+                                    fullname=acc['name'],
+                                    fraction=1000,
+                                    book=book
+                                )
+                                book.save()
+                                print(Fore.YELLOW + f"DEBUG: !!! Created new commodity: {stock_commodity.mnemonic}")
+                                set_commodity_price(book,
+                                                    "NSE",
+                                                    stock_commodity.mnemonic,
+                                                    book.default_currency.mnemonic,
+                                                    Decimal(acc.get('initial_price', 0.0)),
+                                                    datetime.now())
 
-            for acc, fullname in accounts_to_create:
-                print(Fore.YELLOW + f"DEBUG: Processing account: {fullname}")
-                # Search for existing account with matching name and parent
-                existing = next(
-                    (a for a in book.accounts
-                     if a.name == acc['name'] and
-                     (parent is None or a.parent == parent)),
-                    None
-                )
-
-                if existing:
-                    print(Fore.YELLOW + f"DEBUG: Account already exists: {fullname} - checking for children")
-                    results.append(f"Account already exists: {fullname} - checking for children")
-                    new_acc = existing
-                else:
-                    # Handle stock accounts differently
-                    if acc.get('type', '').upper() == "STOCK":
-                        print(Fore.YELLOW + f"DEBUG: Creating stock account: {acc['name']}")
-                        namespace = acc.get('namespace', os.getenv('GC_CLI_COMMODITY_NAMESPACE', 'NSE'))
-                        try:
-                            stock_commodity = book.commodities(namespace=namespace, mnemonic=acc['name'])
-                            print(Fore.YELLOW + f"DEBUG: Found existing commodity: {stock_commodity.mnemonic}")
-                        except KeyError:
-                            print(Fore.YELLOW + f"DEBUG: Creating new commodity: {acc['name']} in namespace {namespace}")
-                            stock_commodity = piecash.Commodity(
-                                namespace=namespace,
-                                mnemonic=acc['name'],
-                                fullname=acc['name'],
-                                fraction=1000,
-                                book=book
+                            new_acc = Account(
+                                name=acc['name'],
+                                type="STOCK",
+                                commodity=stock_commodity,
+                                commodity_scu=1000,
+                                parent=parent or book.root_account,
+                                description=acc.get('description', '')
                             )
                             book.save()
-                            print(Fore.YELLOW + f"DEBUG: !!! Created new commodity: {stock_commodity.mnemonic}")
-                            set_commodity_price(book,
-                                                "NSE",
-                                                stock_commodity.mnemonic,
-                                                book.default_currency.mnemonic,
-                                                Decimal(acc.get('initial_price', 0.0)),
-                                                datetime.now())
+                            print(Fore.YELLOW + f"DEBUG: Created and saved new stock account: {new_acc.fullname}")
+                        else:
+                            # Create new account
+                            print(Fore.YELLOW + f"DEBUG: Creating new account: {acc['name']} of type {acc.get('type', 'ASSET')}")
+                            new_acc = Account(
+                                name=acc['name'],
+                                type=acc.get('type', parent.type if parent is not None else "ASSET").upper(), # default to parent account type
+                                commodity=book.default_currency,
+                                parent=parent or book.root_account,
+                                description=acc.get('description', '')
+                            )
+                            # Save immediately after account creation
+                            book.save()
+                            print(Fore.YELLOW + f"DEBUG: Created and saved new account: {new_acc.fullname}")
 
-                        new_acc = Account(
-                            name=acc['name'],
-                            type="STOCK",
-                            commodity=stock_commodity,
-                            commodity_scu=1000,
-                            parent=parent or book.root_account,
-                            description=acc.get('description', '')
-                        )
+                    # Handle initial balance if provided
+                    if 'initial_balance' in acc:
+                        print(Fore.YELLOW + f"DEBUG: Setting initial balance of {acc['initial_balance']} for account {acc['name']} (type: {new_acc.type})")
+                        if new_acc.type == "ASSET":
+                            print(Fore.YELLOW + f"DEBUG: Processing ASSET account {new_acc.fullname}")
+                        balance = Decimal(str(acc['initial_balance']))
+                        # Handle balance date with debug logging
+                        balance_date_str = acc.get('balance_date', date.today().isoformat())
+                        print(Fore.YELLOW + f"DEBUG: Processing balance date string: {balance_date_str}")
+                        try:
+                            balance_date = datetime.strptime(balance_date_str, '%Y-%m-%d').date()
+                            enter_date = datetime.combine(balance_date, datetime.min.time())  # Convert to datetime
+                            print(Fore.YELLOW + f"DEBUG: Parsed balance date: {balance_date} (type: {type(balance_date)})")
+                            print(Fore.YELLOW + f"DEBUG: Using enter_date: {enter_date} (type: {type(enter_date)})")
+                        except Exception as e:
+                            print(Fore.RED + f"ERROR: Failed to parse balance date '{balance_date_str}': {str(e)}")
+                            raise
+
+                        # Create offsetting transaction with specified date
                         book.save()
-                        print(Fore.YELLOW + f"DEBUG: Created and saved new stock account: {new_acc.fullname}")
+                        print(Fore.YELLOW + f"DEBUG: Account saved successfully before creating transaction")
+
+                        # Refresh account references to ensure they're in the current session
+                        new_acc = book.accounts.get(fullname=new_acc.fullname)
+                        equity_acc = book.accounts.get(fullname="Equity")
+                        if not new_acc or not equity_acc:
+                            raise ValueError("Failed to refresh account references in session")
+
+                        print(Fore.YELLOW + f"DEBUG: Checking account type for transaction creation: {new_acc.type}")
+                        if new_acc.type in ["ASSET", "BANK"]:
+                            print(Fore.YELLOW + f"DEBUG: Creating ASSET/BANK transaction for {new_acc.fullname}")
+                            # with book:
+                            print(Fore.YELLOW + f"DEBUG: Creating transaction for {new_acc.fullname} with balance {balance} on {balance_date}")
+                            tx = Transaction(
+                                currency=book.default_currency,
+                                description="Initial balance",
+                                splits=[
+                                    Split(account=new_acc, value=balance),
+                                    Split(account=equity_acc, value=-balance)
+                                ],
+                                post_date=balance_date,
+                                enter_date=enter_date,  # Use the datetime version
+                            )
+                            print(Fore.YELLOW + f"DEBUG: Transaction created: {tx}")
+                            book.save()
+                            print(Fore.YELLOW + f"DEBUG: Transaction saved successfully")
+                        elif new_acc.type in ["LIABILITY", "CREDIT"]:
+                            # with book:
+                            print(Fore.YELLOW + f"DEBUG: Creating liability transaction for {new_acc.fullname} with balance {balance} on {balance_date}")
+                            tx = Transaction(
+                                currency=book.default_currency,
+                                description="Initial balance",
+                                splits=[
+                                    Split(account=new_acc, value=-balance),
+                                    Split(account=equity_acc, value=balance)
+                                ],
+                                post_date=balance_date,
+                                enter_date=enter_date,  # Use the datetime version
+                            )
+                            print(Fore.YELLOW + f"DEBUG: Liability transaction created: {tx}")
+                            book.save()
+                            print(Fore.YELLOW + f"DEBUG: Liability transaction saved successfully")
+
+                    print(Fore.YELLOW + f"DEBUG: Successfully created account: {fullname}")
+                    results.append(f"Created account: {fullname}")
+
+                    # Recursively create child accounts (even if account already existed)
+                    if 'children' in acc:
+                        print(Fore.YELLOW + f"DEBUG: Found {len(acc['children'])} child accounts for {fullname}")
+                        print(Fore.YELLOW + f"DEBUG: Child accounts: {[c['name'] for c in acc['children']]}")
+
+                        # Process children accounts
+                        parent_acc = book.accounts.get(fullname=new_acc.fullname)
+                        if not parent_acc:
+                            raise ValueError(f"Parent account {new_acc.fullname} not found in session")
+                        create_accounts(acc['children'], parent_acc)
                     else:
-                        # Create new account
-                        print(Fore.YELLOW + f"DEBUG: Creating new account: {acc['name']} of type {acc.get('type', 'ASSET')}")
-                        new_acc = Account(
-                            name=acc['name'],
-                            type=acc.get('type', parent.type if parent is not None else "ASSET").upper(), # default to parent account type
-                            commodity=book.default_currency,
-                            parent=parent or book.root_account,
-                            description=acc.get('description', '')
-                        )
-                        # Save immediately after account creation
-                        book.save()
-                        print(Fore.YELLOW + f"DEBUG: Created and saved new account: {new_acc.fullname}")
+                        print(Fore.YELLOW + f"DEBUG: No children found for {fullname}")
 
-                # Handle initial balance if provided
-                if 'initial_balance' in acc:
-                    print(Fore.YELLOW + f"DEBUG: Setting initial balance of {acc['initial_balance']} for account {acc['name']} (type: {new_acc.type})")
-                    if new_acc.type == "ASSET":
-                        print(Fore.YELLOW + f"DEBUG: Processing ASSET account {new_acc.fullname}")
-                    balance = Decimal(str(acc['initial_balance']))
-                    # Handle balance date with debug logging
-                    balance_date_str = acc.get('balance_date', date.today().isoformat())
-                    print(Fore.YELLOW + f"DEBUG: Processing balance date string: {balance_date_str}")
-                    try:
-                        balance_date = datetime.strptime(balance_date_str, '%Y-%m-%d').date()
-                        enter_date = datetime.combine(balance_date, datetime.min.time())  # Convert to datetime
-                        print(Fore.YELLOW + f"DEBUG: Parsed balance date: {balance_date} (type: {type(balance_date)})")
-                        print(Fore.YELLOW + f"DEBUG: Using enter_date: {enter_date} (type: {type(enter_date)})")
-                    except Exception as e:
-                        print(Fore.RED + f"ERROR: Failed to parse balance date '{balance_date_str}': {str(e)}")
-                        raise
-
-                    # Create offsetting transaction with specified date
-                    book.save()
-                    print(Fore.YELLOW + f"DEBUG: Account saved successfully before creating transaction")
-
-                    # Refresh account references to ensure they're in the current session
-                    new_acc = book.accounts.get(fullname=new_acc.fullname)
-                    equity_acc = book.accounts.get(fullname="Equity")
-                    if not new_acc or not equity_acc:
-                        raise ValueError("Failed to refresh account references in session")
-
-                    print(Fore.YELLOW + f"DEBUG: Checking account type for transaction creation: {new_acc.type}")
-                    if new_acc.type in ["ASSET", "BANK"]:
-                        print(Fore.YELLOW + f"DEBUG: Creating ASSET/BANK transaction for {new_acc.fullname}")
-                        # with book:
-                        print(Fore.YELLOW + f"DEBUG: Creating transaction for {new_acc.fullname} with balance {balance} on {balance_date}")
-                        tx = Transaction(
-                            currency=book.default_currency,
-                            description="Initial balance",
-                            splits=[
-                                Split(account=new_acc, value=balance),
-                                Split(account=equity_acc, value=-balance)
-                            ],
-                            post_date=balance_date,
-                            enter_date=enter_date,  # Use the datetime version
-                        )
-                        print(Fore.YELLOW + f"DEBUG: Transaction created: {tx}")
-                        book.save()
-                        print(Fore.YELLOW + f"DEBUG: Transaction saved successfully")
-                    elif new_acc.type in ["LIABILITY", "CREDIT"]:
-                        # with book:
-                        print(Fore.YELLOW + f"DEBUG: Creating liability transaction for {new_acc.fullname} with balance {balance} on {balance_date}")
-                        tx = Transaction(
-                            currency=book.default_currency,
-                            description="Initial balance",
-                            splits=[
-                                Split(account=new_acc, value=-balance),
-                                Split(account=equity_acc, value=balance)
-                            ],
-                            post_date=balance_date,
-                            enter_date=enter_date,  # Use the datetime version
-                        )
-                        print(Fore.YELLOW + f"DEBUG: Liability transaction created: {tx}")
-                        book.save()
-                        print(Fore.YELLOW + f"DEBUG: Liability transaction saved successfully")
-
-                print(Fore.YELLOW + f"DEBUG: Successfully created account: {fullname}")
-                results.append(f"Created account: {fullname}")
-
-                # Recursively create child accounts (even if account already existed)
-                if 'children' in acc:
-                    print(Fore.YELLOW + f"DEBUG: Found {len(acc['children'])} child accounts for {fullname}")
-                    print(Fore.YELLOW + f"DEBUG: Child accounts: {[c['name'] for c in acc['children']]}")
-
-                    # Process children accounts
-                    parent_acc = book.accounts.get(fullname=new_acc.fullname)
-                    if not parent_acc:
-                        raise ValueError(f"Parent account {new_acc.fullname} not found in session")
-                    create_accounts(acc['children'], parent_acc)
-                else:
-                    print(Fore.YELLOW + f"DEBUG: No children found for {fullname}")
-                
+                except Exception as e:
+                    results.append(f"Error creating account {acc.get('name', '')}: {str(e)}")
+                    continue
         # Create accounts in the book
         with book:
             create_accounts(account_data['accounts'])
@@ -2353,6 +2281,193 @@ async def list_tools(ctx):
     log.debug(f"Returning \n {rv}")
     return rv
 
+
+@gnucash_agent.tool
+async def add_dummy_accounts(ctx: RunContext[GnuCashQuery]) -> str:
+    """Add dummy accounts and transactions to the active GnuCash book for testings...
+    Use this tool when the user asks for Dummy or Sample or Test account creation or addition.
+
+    This adds standard account types and sample transactions to the active book:
+    - Assets (with Checking and Savings accounts)
+    - Liabilities (with Credit Card account)
+    - Income (with Salary account)
+    - Expenses (with Groceries and Utilities accounts)
+
+    Returns str: Success message or error details
+
+    Raises:
+        piecash.BookError: If account creation fails
+        sqlalchemy.exc.SQLAlchemyError: If database operations fail
+    """
+    log.debug("Entering add_sample_accounts")
+    if not get_active_book():
+        return "No active book. Please create or open a book first."
+
+    try:
+        book = piecash.open_book(get_active_book(), open_if_lock=True, readonly=False)
+        log.info(f"Adding sample accounts to book: {get_active_book()}")
+
+        with book:
+            # Create main account categories
+            assets = Account(
+                name="Assets",
+                type="ASSET",
+                commodity=book.default_currency,
+                parent=book.root_account,
+                description="Asset accounts"
+            )
+
+            expenses = Account(
+                name="Expenses",
+                type="EXPENSE",
+                commodity=book.default_currency,
+                parent=book.root_account,
+                description="Expense accounts"
+            )
+
+            income = Account(
+                name="Income",
+                type="INCOME",
+                commodity=book.default_currency,
+                parent=book.root_account,
+                description="Income accounts"
+            )
+
+            liabilities = Account(
+                name="Liabilities",
+                type="LIABILITY",
+                commodity=book.default_currency,
+                parent=book.root_account,
+                description="Liability accounts"
+            )
+            book.save()
+
+            # Create sub-accounts
+            checking = Account(
+                name="Checking Account",
+                type="BANK",
+                commodity=book.default_currency,
+                parent=assets,
+                description="Main checking account"
+            )
+
+            savings = Account(
+                name="Savings Account",
+                type="BANK",
+                commodity=book.default_currency,
+                parent=assets,
+                description="Savings account"
+            )
+
+            book.save()
+
+            credit_card = Account(
+                name="Credit Card",
+                type="CREDIT",
+                commodity=book.default_currency,
+                parent=liabilities,
+                description="Credit card account"
+            )
+
+            salary = Account(
+                name="Salary",
+                type="INCOME",
+                commodity=book.default_currency,
+                parent=income,
+                description="Salary income"
+            )
+
+            groceries = Account(
+                name="Groceries",
+                type="EXPENSE",
+                commodity=book.default_currency,
+                parent=expenses,
+                description="Grocery expenses"
+            )
+
+            utilities = Account(
+                name="Utilities",
+                type="EXPENSE",
+                commodity=book.default_currency,
+                parent=expenses,
+                description="Utility expenses"
+            )
+
+            book.save()
+
+            # Add transactions within the same context
+            Transaction(
+                currency=book.default_currency,
+                description="Initial deposit",
+                notes="Opening balance",
+                splits=[
+                    Split(account=checking, value=Decimal("5000.00")),
+                    Split(account=salary, value=Decimal("-5000.00"))
+                ],
+                post_date=date(2024, 1, 1),
+                enter_date=datetime.now(),
+            )
+
+            book.save()
+
+            Transaction(
+                currency=book.default_currency,
+                description="Transfer to savings",
+                notes="Monthly savings",
+                splits=[
+                    Split(account=checking, value=Decimal("-1000.00")),
+                    Split(account=savings, value=Decimal("1000.00"))
+                ],
+                post_date=date(2024, 1, 2),
+                enter_date=datetime.now(),
+            )
+
+            Transaction(
+                currency=book.default_currency,
+                description="Grocery shopping",
+                notes="Weekly groceries",
+                splits=[
+                    Split(account=credit_card, value=Decimal("-150.50")),
+                    Split(account=groceries, value=Decimal("150.50"))
+                ],
+                post_date=date(2024, 1, 3),
+                enter_date=datetime.now(),
+            )
+
+            Transaction(
+                currency=book.default_currency,
+                description="Utility bill payment",
+                notes="Monthly utilities",
+                splits=[
+                    Split(account=checking, value=Decimal("-200.00")),
+                    Split(account=utilities, value=Decimal("200.00"))
+                ],
+                post_date=date(2024, 1, 4),
+                enter_date=datetime.now(),
+            )
+
+            Transaction(
+                currency=book.default_currency,
+                description="Credit card payment",
+                notes="Monthly payment",
+                splits=[
+                    Split(account=checking, value=Decimal("-150.50")),
+                    Split(account=credit_card, value=Decimal("150.50"))
+                ],
+                post_date=date(2024, 1, 5),
+                enter_date=datetime.now(),
+            )
+
+            book.save()
+
+        book.close()
+        log.debug("Sample accounts added successfully")
+        return "Successfully added sample accounts and transactions to the active book."
+
+    except Exception as e:
+        return Fore.RED + f"Error adding sample accounts: {str(e)}"
+
+
 if __name__ == "__main__":
     import argparse
     import asyncio
@@ -2374,3 +2489,4 @@ if __name__ == "__main__":
 
     # Run the CLI
     loop.run_until_complete(run_cli(args.book))
+
