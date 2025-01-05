@@ -15,7 +15,7 @@ from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.styles import Style
 from pydantic import BaseModel
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent, RunContext, UnexpectedModelBehavior, capture_run_messages
 
 init(autoreset=True)  # Auto reset colors after each print
 from datetime import date, timedelta
@@ -2175,14 +2175,25 @@ async def run_cli(book_name: str = None):
                 
             if not query:
                 continue
-            
-            result = await gnucash_agent.run(query, message_history=history)
-            history += result.new_messages()
-            history = history[-5:]  # Keep last 5 messages
-            print(result.data)
-            if get_active_book():
-                print(f"\n[Active book: {get_active_book()}]")
-                
+
+            # https://ai.pydantic.dev/agents/#model-errors 
+            with capture_run_messages() as messages:
+                try:
+                    result = await gnucash_agent.run(query, message_history=history)
+                    history += result.new_messages()
+                    history = history[-5:]  # Keep last 5 messages
+                    print(result.data)
+                    if get_active_book():
+                        print(f"\n[Active book: {get_active_book()}]")
+                except UnexpectedModelBehavior as e:
+                    print('An error occurred:', e)
+                    #> An error occurred: Tool exceeded max retries count of 1
+                    print('cause:', repr(e.__cause__))
+                    #> cause: ModelRetry('Please try again.')
+                    print('messages:', messages)
+                else:
+                    # All is fine ...
+                    pass
         except KeyboardInterrupt:
             # Handle Ctrl+C gracefully
             print("\nType 'quit' to exit or continue entering commands.")
