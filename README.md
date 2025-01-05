@@ -95,9 +95,13 @@ GnuCash> init from SampleAccounts.yaml
 - `save_as_template [name]` - Save book structure as template
 - `set_default_currency [code]` - Change book's default currency
 - `set_accounts_currency [code]` - Update all accounts' currency
+- `set_accounts_precision [precision]` - Set the precision for all accounts
 - `search_accounts [pattern]` - Search accounts by name (supports regex)
 - `move_account [account] [new_parent]` - Move account to new parent
 - `get_default_currency` - Show current default currency
+- `add_stock_transaction [stock_symbol] [date] [units] [price] [--commission] [--credit_account] [--stock_account]` - Add a stock purchase or sale
+- `list_tools` - List all available commands
+- `add_dummy_accounts` - Add dummy accounts and transactions for testing
 
 ## Cash Flow Statement
 
@@ -171,6 +175,11 @@ Update all accounts' currency:
 GnuCash> set currency for all accounts to EUR
 ```
 
+Set the precision for all accounts:
+```
+GnuCash> set precision to 1000
+```
+
 ## Reports
 
 Generate detailed financial reports:
@@ -214,6 +223,7 @@ This creates a new file without transactions but preserving:
 - Account hierarchy
 - Account properties
 - Currency settings
+- Account precision settings
 
 ## Backup Management
 
@@ -229,9 +239,9 @@ GnuCash> purge_backups mybook --before 2024-12-31
 ```
 
 Configure backup retention:
-- Set GC_CLI_PURGE_DAYS in .env for backup retention days
-- Set GC_CLI_SWEEP_SECS for backup sweep interval
-- Set GC_CLI_SWEEP_AGE_MINS for backup move age
+- Set `GC_CLI_PURGE_DAYS` in `.env` for backup retention days
+- Set `GC_CLI_SWEEP_SECS` for backup sweep interval
+- Set `GC_CLI_SWEEP_AGE_MINS` for backup move age
 
 ## Error Handling
 
@@ -247,6 +257,48 @@ The tool provides colored output:
 3. Use templates for consistent account structures
 4. Review generated reports regularly
 5. Keep backup retention policy appropriate for your needs
+6. Use `list_tools` to see all available commands
+7. Use `add_dummy_accounts` to add sample accounts for testing
+
+## Stock Transactions
+
+Add stock purchase or sale transactions:
+```
+GnuCash> add_stock_transaction AAPL 2024-01-05 100 150.25 --commission 5.00 --credit_account "Assets:Checking Account"
+GnuCash> add_stock_transaction GOOG 2024-01-10 -50 2700.00 --credit_account "Assets:Checking Account"
+```
+
+- `stock_symbol`: Stock ticker symbol (e.g., AAPL)
+- `transaction_date`: Date in YYYY-MM-DD format
+- `units`: Number of units (+ for buy, - for sell)
+- `price`: Price per unit
+- `--commission`: Commission/fees amount (optional)
+- `--credit_account`: Account to credit/debit (optional, defaults to stock parent)
+- `--stock_account`: Stock account (optional, defaults to Assets:Investments:Stocks)
+
+## Available Commands
+
+- `create_book [name]` - Create a new GnuCash book with sample accounts
+- `open_book [name]` - Open an existing book
+- `create_accounts_from_file [file]` - Create accounts from YAML file
+- `list_accounts` - Show all accounts with balances
+- `transfer_funds [from] [to] [amount]` - Transfer money between accounts
+- `add_transaction [from] [to] [amount]` - Create complex transactions with multiple splits
+- `list_transactions [limit]` - Show recent transactions
+- `generate_cashflow_statement [start_date] [end_date]` - Generate cash flow report
+- `generate_balance_sheet` - Generate balance sheet report
+- `export_reports_pdf [filename]` - Export reports to PDF
+- `purge_backups [book] [--days N|--before YYYY-MM-DD]` - Clean up old backups
+- `save_as_template [name]` - Save book structure as template
+- `set_default_currency [code]` - Change book's default currency
+- `set_accounts_currency [code]` - Update all accounts' currency
+- `set_accounts_precision [precision]` - Set the precision for all accounts
+- `search_accounts [pattern]` - Search accounts by name (supports regex)
+- `move_account [account] [new_parent]` - Move account to new parent
+- `get_default_currency` - Show current default currency
+- `add_stock_transaction [stock_symbol] [date] [units] [price] [--commission] [--credit_account] [--stock_account]` - Add a stock purchase or sale
+- `list_tools` - List all available commands
+- `add_dummy_accounts` - Add dummy accounts and transactions for testing
 
 
 
