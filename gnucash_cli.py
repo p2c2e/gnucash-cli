@@ -79,7 +79,7 @@ gnucash_agent = Agent(
     # deps_type=Optional[GnuCashQuery], # type: ignore
     # result_type=str,  # type: ignore
     system_prompt=system_prompt,
-    retries=3,
+    retries=5,
 )
 
 # Log the system prompt for reference
@@ -111,6 +111,7 @@ async def create_book(ctx: RunContext[GnuCashQuery], book_name: str = "sample_ac
         piecash.BookError: If book creation fails
         sqlalchemy.exc.SQLAlchemyError: If database operations fail
     """
+    log.debug(f"Entering create_book with book_name: {book_name}")
     global active_book
     try:
         log.info(f"Creating book: {book_name}.gnucash")
@@ -186,6 +187,7 @@ async def get_active_book(ctx: RunContext[GnuCashQuery]) -> str:
     Returns - str: Name of the active book with .gnucash extension if set,
              or message indicating no active book
     """
+    log.debug("Entering get_active_book")
     global active_book
     if active_book:
         log.debug(f"Active book found: {active_book}")
@@ -209,6 +211,7 @@ async def open_book(ctx: RunContext[GnuCashQuery], book_name: str) -> str:
         FileNotFoundError: If book file doesn't exist
         piecash.BookError: If book is corrupted or invalid
     """
+    log.debug(f"Entering open_book with book_name: {book_name}")
     global active_book
     try:
         print(f"Attempting to open book: {book_name}")
@@ -241,6 +244,7 @@ async def list_accounts(ctx: RunContext[GnuCashQuery]) -> str:
     Raises:
         piecash.BookError: If book access fails
     """
+    log.debug("Entering list_accounts")
     global active_book
     if not active_book:
         print(Fore.YELLOW + "DEBUG: No active book - returning error")
@@ -293,6 +297,7 @@ async def transfer_funds(ctx: RunContext[GnuCashQuery], from_account: str, to_ac
         ValueError: If amount is invalid or accounts don't exist
         piecash.BookError: If transaction creation fails
     """
+    log.debug(f"Entering transfer_funds with from_account: {from_account}, to_account: {to_account}, amount: {amount}, description: {description}")
     global active_book
     if not active_book:
         return "No active book. Please create or open a book first."
@@ -343,13 +348,14 @@ async def create_subaccount(
     account_type: str = None,
     description: str = None,
     initial_balance: float = 0.0,
-    account_data: dict = None
+    balance_date: str = None
 ) -> str:
     """Create a new subaccount under a specified parent account.
     
     Creates a new account with optional initial balance.
     For ASSET/BANK accounts, creates offsetting transaction to Equity.
     For LIABILITY/CREDIT accounts, creates reverse offset transaction.
+    For STOCK accounts, use create_stock_sub_account Tool. Not this function
 
     Args:
         parent_account (str): Full name of the parent account (must exist)
@@ -364,6 +370,7 @@ async def create_subaccount(
         ValueError: If account type is invalid or parent doesn't exist
         piecash.BookError: If account creation fails
     """
+    log.debug(f"Entering create_subaccount with parent_account: {parent_account}, account_name: {account_name}, account_type: {account_type}, description: {description}, initial_balance: {initial_balance}")
     print(f"{parent_account}-{account_name}-{account_type}-{description}-{initial_balance}")
     global active_book
     if not active_book:
@@ -414,86 +421,15 @@ async def create_subaccount(
         with book:
             log.debug(f"Starting account creation: {account_name}")
             
-            # For stock accounts, create with proper commodity
-            if account_type == "STOCK":
-                log.debug("Creating stock account")
-                    
-                # Get namespace from YAML or use default
-                namespace = account_data.get('namespace', os.getenv('GC_CLI_COMMODITY_NAMESPACE', 'NSE')) if account_data else os.getenv('GC_CLI_COMMODITY_NAMESPACE', 'NSE')
-                log.debug(f"Using commodity namespace: {namespace}")
-                    
-                # Try to find existing commodity first
-                stock_commodity = None
-                try:
-                    stock_commodity = book.commodities(namespace=namespace, mnemonic=account_name)
-                    log.debug(f"Found existing stock commodity: {stock_commodity}")
-                except KeyError:
-                    # Create new stock commodity if it doesn't exist
-                    log.debug(f"Creating new stock commodity: {account_name}")
-                    stock_commodity = piecash.Commodity(
-                        namespace=namespace,
-                        mnemonic=account_name,
-                        fullname=account_name,
-                        fraction=1000,  # Standard fraction for stocks
-                        cusip=None,
-                        book=book
-                    )
-                    log.debug(f"Created stock commodity: {stock_commodity}")
-                    book.save()  # Save to ensure commodity is persisted
-
-                # Create the stock account
-                log.debug(f"Creating stock account: {account_name}")
-                
-                # Create the commodity if it doesn't exist
-                if not stock_commodity:
-                    log.debug(f"Creating new stock commodity: {namespace}, mnemonic: {account_name}")
-                    stock_commodity = piecash.Commodity(
-                        namespace=namespace,
-                        mnemonic=account_name,
-                        fullname=account_name,
-                        fraction=1000,  # Standard fraction for stocks
-                        cusip=None,
-                        book=book
-                    )
-                    log.debug(f"Created stock commodity: {stock_commodity}")
-                    book.save()  # Save to ensure commodity is persisted
-
-                # Create the stock account linked to the commodity
-                new_account = Account(
-                    name=account_name,
-                    type="STOCK",
-                    commodity=stock_commodity,
-                    commodity_scu=1000,  # Standard commodity_scu for stocks
-                    parent=parent or book.root_account,
-                    description=description or f"{account_name} stock account",
-                    book=book
-                )
-                
-                # Add initial price if provided
-                if 'initial_price' in account_data:
-                    price = Decimal(str(account_data['initial_price']))
-                    log.debug("adding_initial_price", 
-                            stock_symbol=account_name,
-                            price=price)
-                    stock_commodity.update_prices([
-                        {
-                            "datetime": datetime.now(),
-                            "value": price,
-                            "currency": book.default_currency
-                        }
-                    ])
-                book.save()  # Save after account creation
-                log.debug(f"Created stock account: {new_account}")
-            else:
-                log.debug(f"Creating regular account: {account_name}, type: {account_type}")
-                new_account = Account(
-                    name=account_name,
-                    type=account_type,
-                    commodity=book.default_currency,
-                    parent=parent or book.root_account,
-                    description=description or f"{account_name} account"
-                )
-                log.debug(f"Created account: {new_account}")
+            log.debug(f"Creating regular account: {account_name}, type: {account_type}")
+            new_account = Account(
+                name=account_name,
+                type=account_type,
+                commodity=book.default_currency,
+                parent=parent or book.root_account,
+                description=description or f"{account_name} account"
+            )
+            log.debug(f"Created account: {new_account}")
             
             # Create opening transaction if initial balance is provided
             if initial_balance != 0:
@@ -553,6 +489,226 @@ async def create_subaccount(
         log.error(f"Error creating subaccount: {str(e)}")
         return f"Error creating subaccount: {str(e)}"
 
+
+# @gnucash_agent.tool
+# async def create_sub_stock_account(
+#         ctx: RunContext[GnuCashQuery],
+#         parent_account: str,
+#         account_name: str,
+#         account_type: str = None,
+#         description: str = None,
+#         initial_balance: float = 0.0,
+#         account_data: dict = None
+# ) -> str:
+#     """Create a new subaccount under a specified parent account.
+#
+#     Creates a new account with optional initial balance.
+#     For ASSET/BANK accounts, creates offsetting transaction to Equity.
+#     For LIABILITY/CREDIT accounts, creates reverse offset transaction.
+#
+#     Args:
+#         parent_account (str): Full name of the parent account (must exist)
+#         account_name (str): Name for the new subaccount (must be unique)
+#         account_type (str): Type of account (ASSET, BANK, EXPENSE, etc.) -Ask the user if it is not mentioned.
+#         description (str, optional): Description for the new account
+#         initial_balance (float, optional): Initial balance to set for the account
+#
+#     Returns - str: Success message with account details or error message
+#
+#     Raises:
+#         ValueError: If account type is invalid or parent doesn't exist
+#         piecash.BookError: If account creation fails
+#     """
+#     log.debug(f"Entering create_subaccount with parent_account: {parent_account}, account_name: {account_name}, account_type: {account_type}, description: {description}, initial_balance: {initial_balance}")
+#     print(f"{parent_account}-{account_name}-{account_type}-{description}-{initial_balance}")
+#     global active_book
+#     if not active_book:
+#         return "No active book. Please create or open a book first."
+#
+#     # Validate account type
+#     # List of valid GnuCash account types with descriptions
+#     valid_types = {
+#         "ASSET": "Assets (e.g., Bank Accounts, Investments)",
+#         "BANK": "Bank Accounts",
+#         "CASH": "Cash Accounts",
+#         "CREDIT": "Credit Cards",
+#         "EXPENSE": "Expenses",
+#         "INCOME": "Income",
+#         "LIABILITY": "Liabilities",
+#         "EQUITY": "Equity",
+#         "TRADING": "Trading Accounts",
+#         "STOCK": "Stock/Investment Accounts",
+#         "MUTUAL": "Mutual Fund Accounts",
+#         "CURRENCY": "Currency Trading Accounts",
+#         "RECEIVABLE": "Accounts Receivable",
+#         "PAYABLE": "Accounts Payable"
+#     }
+#
+#     # Normalize and validate account type
+#     account_type = account_type.upper()
+#     if account_type not in valid_types:
+#         valid_types_str = "\n".join(f"- {t}: {d}" for t, d in valid_types.items())
+#         print(Fore.YELLOW + f"DEBUG: Invalid account type '{account_type}'. Valid types are:\n{valid_types_str}")
+#         return f"Invalid account type. Must be one of:\n{valid_types_str}"
+#
+#     try:
+#         print(Fore.YELLOW + f"DEBUG: Attempting to open book: {active_book}")
+#         book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
+#         log.debug("Book opened successfully")
+#
+#         # Find the parent account
+#         log.debug(f"Looking for parent account: {parent_account}")
+#         parent = book.accounts.get(fullname=parent_account)
+#         if not parent:
+#             log.error(f"Parent account not found: {parent_account}")
+#             book.close()
+#             print(Fore.YELLOW + f"DEBUG: Parent account '{parent_account}' not found - returning error")
+#             return f"Parent account '{parent_account}' not found."
+#         log.debug(f"Found parent account: {parent.fullname}, type: {parent.type}")
+#
+#         # Create the subaccount
+#         with book:
+#             log.debug(f"Starting account creation: {account_name}")
+#
+#             # For stock accounts, create with proper commodity
+#             if account_type == "STOCK":
+#                 log.debug("Creating stock account")
+#
+#                 # Get namespace from YAML or use default
+#                 namespace = account_data.get('namespace', os.getenv('GC_CLI_COMMODITY_NAMESPACE', 'NSE')) if account_data else os.getenv('GC_CLI_COMMODITY_NAMESPACE', 'NSE')
+#                 log.debug(f"Using commodity namespace: {namespace}")
+#
+#                 # Try to find existing commodity first
+#                 stock_commodity = None
+#                 try:
+#                     stock_commodity = book.commodities(namespace=namespace, mnemonic=account_name)
+#                     log.debug(f"Found existing stock commodity: {stock_commodity}")
+#                 except KeyError:
+#                     # Create new stock commodity if it doesn't exist
+#                     log.debug(f"Creating new stock commodity: {account_name}")
+#                     stock_commodity = piecash.Commodity(
+#                         namespace=namespace,
+#                         mnemonic=account_name,
+#                         fullname=account_name,
+#                         fraction=1000,  # Standard fraction for stocks
+#                         cusip=None,
+#                         book=book
+#                     )
+#                     log.debug(f"Created stock commodity: {stock_commodity}")
+#                     book.save()  # Save to ensure commodity is persisted
+#
+#                 # Create the stock account
+#                 log.debug(f"Creating stock account: {account_name}")
+#
+#                 # Create the commodity if it doesn't exist
+#                 if not stock_commodity:
+#                     log.debug(f"Creating new stock commodity: {namespace}, mnemonic: {account_name}")
+#                     stock_commodity = piecash.Commodity(
+#                         namespace=namespace,
+#                         mnemonic=account_name,
+#                         fullname=account_name,
+#                         fraction=1000,  # Standard fraction for stocks
+#                         cusip=None,
+#                         book=book
+#                     )
+#                     log.debug(f"Created stock commodity: {stock_commodity}")
+#                     book.save()  # Save to ensure commodity is persisted
+#
+#                 # Create the stock account linked to the commodity
+#                 new_account = Account(
+#                     name=account_name,
+#                     type="STOCK",
+#                     commodity=stock_commodity,
+#                     commodity_scu=1000,  # Standard commodity_scu for stocks
+#                     parent=parent or book.root_account,
+#                     description=description or f"{account_name} stock account",
+#                     book=book
+#                 )
+#
+#                 # Add initial price if provided
+#                 if 'initial_price' in account_data:
+#                     price = Decimal(str(account_data['initial_price']))
+#                     log.debug("adding_initial_price",
+#                               stock_symbol=account_name,
+#                               price=price)
+#                     stock_commodity.update_prices([
+#                         {
+#                             "datetime": datetime.now(),
+#                             "value": price,
+#                             "currency": book.default_currency
+#                         }
+#                     ])
+#                 book.save()  # Save after account creation
+#                 log.debug(f"Created stock account: {new_account}")
+#             else:
+#                 log.debug(f"Creating regular account: {account_name}, type: {account_type}")
+#                 new_account = Account(
+#                     name=account_name,
+#                     type=account_type,
+#                     commodity=book.default_currency,
+#                     parent=parent or book.root_account,
+#                     description=description or f"{account_name} account"
+#                 )
+#                 log.debug(f"Created account: {new_account}")
+#
+#             # Create opening transaction if initial balance is provided
+#             if initial_balance != 0:
+#                 log.debug(f"Creating initial balance transaction: {initial_balance}")
+#
+#                 # Determine the offset account based on account type
+#                 if account_type.upper() in ["ASSET", "BANK"]:
+#                     log.debug("Creating asset/bank transaction")
+#                     equity_acc = book.accounts.get(fullname="Equity")
+#                     if not equity_acc:
+#                         log.error("Equity account not found")
+#                         raise ValueError("Equity account not found")
+#
+#                     log.debug(f"Creating transaction with splits: account: {new_account.fullname}, amount: {initial_balance}, equity amount: {-initial_balance}")
+#                     Transaction(
+#                         currency=book.default_currency,
+#                         description="Initial balance",
+#                         splits=[
+#                             Split(account=new_account, value=Decimal(str(initial_balance))),
+#                             Split(account=equity_acc, value=Decimal(str(-initial_balance)))
+#                         ],
+#                         post_date=date.today(),
+#                         enter_date=datetime.now(),
+#                     )
+#
+#                 elif account_type.upper() in ["LIABILITY", "CREDIT"]:
+#                     log.debug("Creating liability/credit transaction")
+#                     equity_acc = book.accounts.get(fullname="Equity")
+#                     if not equity_acc:
+#                         log.error("Equity account not found")
+#                         raise ValueError("Equity account not found")
+#
+#                     log.debug(f"Creating transaction with splits: account: {new_account.fullname}, amount: {-initial_balance}, equity amount: {initial_balance}")
+#                     Transaction(
+#                         currency=book.default_currency,
+#                         description="Initial balance",
+#                         splits=[
+#                             Split(account=new_account, value=Decimal(str(-initial_balance))),
+#                             Split(account=equity_acc, value=Decimal(str(initial_balance)))
+#                         ],
+#                         post_date=date.today(),
+#                         enter_date=datetime.now(),
+#                     )
+#
+#             log.debug("Saving book changes")
+#             book.save()
+#             log.debug("Book saved successfully")
+#
+#         book.close()
+#         if initial_balance != 0:
+#             log.debug(f"Subaccount created with balance: {account_name}, parent: {parent_account}, initial balance: {initial_balance}")
+#             return f"Successfully created subaccount '{account_name}' under '{parent_account}' with initial balance of {initial_balance}"
+#         log.debug(f"Create subaccount completed: parent: {parent_account}, account: {account_name}")
+#         return f"Successfully created subaccount '{account_name}' under '{parent_account}'"
+#
+#     except Exception as e:
+#         log.error(f"Error creating subaccount: {str(e)}")
+#         return f"Error creating subaccount: {str(e)}"
+
 @gnucash_agent.tool
 async def add_transaction(
     ctx: RunContext[GnuCashQuery],
@@ -560,6 +716,7 @@ async def add_transaction(
     to_accounts: list[dict[str, Union[str, float]]],
     description: str = "Fund transfer"
 ) -> str:
+    log.debug(f"Entering add_transaction with from_account: {from_account}, to_accounts: {to_accounts}, description: {description}")
     """Add a transaction with multiple splits (one-to-many transfer).
     
     Creates a double-entry transaction with:
@@ -647,6 +804,7 @@ async def add_transaction(
 
 @gnucash_agent.tool
 async def list_transactions(ctx: RunContext[GnuCashQuery], limit: int = 10) -> str:
+    log.debug(f"Entering list_transactions with limit: {limit}")
     """List recent transactions in the active GnuCash book.
     
     Returns formatted transaction details including:
@@ -711,6 +869,7 @@ async def list_transactions(ctx: RunContext[GnuCashQuery], limit: int = 10) -> s
 
 @gnucash_agent.tool
 async def generate_balance_sheet(ctx: RunContext[GnuCashQuery]) -> str:
+    log.debug("Entering generate_balance_sheet")
     """Generate an ASCII formatted balance sheet with proper account hierarchy and roll-up totals.
     
     Implements bottom-up calculation of account balances with:
@@ -968,6 +1127,7 @@ async def purge_backups(
     days: int = None,
     before_date: str = None
 ) -> str:
+    log.debug(f"Entering purge_backups with book_name: {book_name}, days: {days}, before_date: {before_date}")
     """Purge old backup files for a GnuCash book.
     
     Deletes backup files matching the pattern {book_name}.gnucash.YYYYMMDDHHMMSS.gnucash
@@ -1038,7 +1198,112 @@ async def purge_backups(
     return "\n".join(result)
 
 @gnucash_agent.tool
+async def create_stock_sub_account(
+    ctx: RunContext[GnuCashQuery],
+    ticker_symbol: str,
+    account_name: str = None,
+    account_type: str = "STOCK", # Should be 'STOCK'
+    parent_path: str = "Assets:Investments",
+    namespace: str = None,
+    initial_price: float = None,
+    description: str = None
+) -> str:
+    """Create a new stock account in GnuCash. Use this only for STOCK type accounts
+    
+    Args:
+        ticker_symbol: Stock ticker symbol (e.g., 'AAPL')
+        account_name: Name for the account (defaults to ticker symbol if None)
+        parent_path: Path to parent account (default: "Assets:Investments")
+        namespace: Stock exchange namespace (e.g., 'NASDAQ', 'NYSE')
+        initial_price: Initial price per share
+        description: Account description
+        
+    Returns - str: Success message or error details
+    """
+    log.debug(f"Entering create_stock_sub_account with ticker: {ticker_symbol}, parent: {parent_path}")
+    
+    global active_book
+    if not active_book:
+        log.debug("No active book. Please create or open a book first.")
+        return "No active book. Please create or open a book first."
+    
+    try:
+        book = piecash.open_book(active_book, open_if_lock=True, readonly=False)
+        
+        # Use ticker symbol as account name if none provided
+        if account_name is None:
+            account_name = ticker_symbol
+            
+        # Use default namespace if none provided
+        if namespace is None:
+            namespace = os.getenv('GC_CLI_COMMODITY_NAMESPACE', 'NASDAQ')
+            
+        log.debug(f"Creating stock account: {account_name} ({namespace}:{ticker_symbol})")
+        
+        # First ensure the commodity (stock) exists
+        try:
+            stock = book.commodities(namespace=namespace, mnemonic=ticker_symbol)
+            log.debug(f"Found existing stock commodity: {stock.mnemonic}")
+        except KeyError:
+            # Create new stock commodity if it doesn't exist
+            log.debug(f"Creating new stock commodity: {ticker_symbol}")
+            stock = piecash.Commodity(
+                namespace=namespace,
+                mnemonic=ticker_symbol,
+                fullname=account_name,
+                fraction=1000,  # Standard fraction for stocks
+                book=book
+            )
+            book.save()
+            log.debug(f"Created new stock commodity: {stock.mnemonic}")
+            
+        # Ensure parent account exists
+        try:
+            parent = book.accounts.get(fullname=parent_path)
+            if not parent:
+                log.error(f"Parent account not found: {parent_path}")
+                raise KeyError(f"Parent account not found: {parent_path}")
+        except KeyError:
+            book.close()
+            return f"Parent account path {parent_path} does not exist"
+            
+        # Create the stock account
+        with book:
+            stock_account = Account(
+                name=account_name,
+                type="STOCK",
+                parent=parent,
+                commodity=stock,
+                commodity_scu=1000,
+                description=description or f"{account_name} stock account",
+                book=book
+            )
+            stock_account_name = stock_account.fullname
+            
+            # Set initial price if provided
+            # if initial_price is not None:
+            #     log.debug(f"Setting initial price: {initial_price}")
+            #     if initial_price == 0.0:
+            #         initial_price = 0.01
+            #
+            #     stock.update_prices([{
+            #         "datetime": datetime.now(),
+            #         "value": initial_price, # Decimal(str(initial_price)),
+            #         "currency": book.default_currency
+            #     }])
+                
+            book.save()
+            
+        book.close()
+        log.debug(f"Stock account created successfully: {stock_account_name}")
+        return f"Successfully created stock account: {stock_account_name}"
+        
+    except Exception as e:
+        log.exception(e)
+        return f"Error creating stock account: {str(e)}"
+
 async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: str) -> str:
+    log.debug(f"Entering create_accounts_from_file with file_path: {file_path}")
     """Create account hierarchy from a YAML file.
     
     Args:
@@ -1241,6 +1506,7 @@ async def create_accounts_from_file(ctx: RunContext[GnuCashQuery], file_path: st
 
 @gnucash_agent.tool
 async def get_default_currency(ctx: RunContext[GnuCashQuery]) -> str:
+    log.debug("Entering get_default_currency")
     """Get the default currency for the active book.
     
     Returns - str: Current default currency code or error message
@@ -1264,6 +1530,7 @@ async def get_default_currency(ctx: RunContext[GnuCashQuery]) -> str:
 
 @gnucash_agent.tool
 async def set_accounts_currency(ctx: RunContext[GnuCashQuery], currency_code: str) -> str:
+    log.debug(f"Entering set_accounts_currency with currency_code: {currency_code}")
     """Set the currency for all accounts in the active book.
     
     Args:
@@ -1310,6 +1577,7 @@ async def set_accounts_currency(ctx: RunContext[GnuCashQuery], currency_code: st
 
 @gnucash_agent.tool
 async def set_accounts_precision(ctx: RunContext[GnuCashQuery], precision: int = 1000) -> str:
+    log.debug(f"Entering set_accounts_precision with precision: {precision}")
     """Set the precision (number of decimal places) for all non-top-level accounts.
     
     Args:
@@ -1355,6 +1623,7 @@ async def set_accounts_precision(ctx: RunContext[GnuCashQuery], precision: int =
 
 @gnucash_agent.tool
 async def set_default_currency(ctx: RunContext[GnuCashQuery], currency_code: str) -> str:
+    log.debug(f"Entering set_default_currency with currency_code: {currency_code}")
     """Set the default currency for the active book.
     
     Args:
@@ -1396,6 +1665,7 @@ async def set_default_currency(ctx: RunContext[GnuCashQuery], currency_code: str
 
 @gnucash_agent.tool
 async def save_as_template(ctx: RunContext[GnuCashQuery], template_name: str) -> str:
+    log.debug(f"Entering save_as_template with template_name: {template_name}")
     """Save current book as a template by copying account structure without transactions.
     
     Creates a new GnuCash file with:
@@ -1482,6 +1752,7 @@ async def add_stock_transaction(
     credit_account: str = None,
     stock_account: str = "Assets:Investments:Stocks"
 ) -> str:
+    log.debug("Entering add_stock_transaction")
     """Add a stock purchase or sale transaction.
     
     Creates a double-entry transaction with:
@@ -1669,6 +1940,7 @@ async def add_stock_transaction(
 
 @gnucash_agent.tool
 async def search_accounts(ctx: RunContext[GnuCashQuery], pattern: str) -> str:
+    log.debug(f"Entering search_accounts with pattern: {pattern}")
     """Search for accounts matching a name pattern (supports regex).
     
     Args:
@@ -1734,6 +2006,7 @@ async def search_accounts(ctx: RunContext[GnuCashQuery], pattern: str) -> str:
 
 @gnucash_agent.tool
 async def move_account(ctx: RunContext[GnuCashQuery], account_name: str, new_parent_name: str) -> str:
+    log.debug(f"Entering move_account with account_name: {account_name}, new_parent_name: {new_parent_name}")
     """Move an account to a new parent account.
     
     Verifies account type compatibility before moving:
@@ -1793,6 +2066,7 @@ async def move_account(ctx: RunContext[GnuCashQuery], account_name: str, new_par
         return f"Error moving account: {str(e)}"
 
 async def export_reports_pdf(ctx: RunContext[GnuCashQuery], output_file: str = "gnucash_reports.pdf") -> str:
+    log.debug(f"Entering export_reports_pdf with output_file: {output_file}")
     """Export all financial reports to a single PDF file.
     
     Generates and combines:
@@ -2034,6 +2308,7 @@ class BackupScheduler:
                 print(Fore.RED + f"Error processing backup file {filepath}: {e}")
 
 async def generate_reports(ctx: RunContext[GnuCashQuery]) -> str:
+    log.debug("Entering generate_reports")
     """Generate standard financial reports from the GnuCash book.
     
     Includes:
@@ -2074,6 +2349,7 @@ async def generate_reports(ctx: RunContext[GnuCashQuery]) -> str:
 
 
 async def run_cli(book_name: str = None):
+    log.debug(f"Entering run_cli with book_name: {book_name}")
     """Run the GnuCash CLI interface.
     
     Args:
