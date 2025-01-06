@@ -3,6 +3,8 @@
 A command-line interface for managing GnuCash books with advanced features for account management, reporting, and automation.
 Uses piecash, pydantic-ai, OpenAI, GenAI / LLMs etc.
 
+![Demo](optimized.gif)
+
 ## Features
 
 - Create and manage GnuCash books
