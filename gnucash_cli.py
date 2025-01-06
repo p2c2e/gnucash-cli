@@ -812,7 +812,7 @@ async def create_stock_sub_account(
         ticker_symbol: Stock ticker symbol (e.g., 'AAPL')
         account_name: Name for the account (defaults to ticker symbol if None)
         parent_path: Path to parent account : Ask the user if not provided with this
-        namespace: Stock exchange namespace (e.g., 'NASDAQ', 'NYSE')
+        namespace: Stock exchange namespace (e.g., 'NSE','NASDAQ', 'NYSE')
         initial_price: Initial price per share
         description: Account description
         
@@ -986,7 +986,8 @@ def ensure_basic_currencies(book):
 
 def set_commodity_price(book, namespace, commodity_mnemonic, currency_mnemonic, price_value, price_date):
     """
-    Set the price of a commodity for a specific date, ensuring the currency exists
+    Set or update the price of a commodity for a specific date, ensuring the currency exists.
+    If a price already exists for the given date and commodity, it will be updated.
 
     Args:
         book: GnuCash book instance
@@ -1008,17 +1009,30 @@ def set_commodity_price(book, namespace, commodity_mnemonic, currency_mnemonic, 
         if isinstance(price_date, datetime):
             price_date = price_date.date()
 
-        # Create new price
-        new_price = Price(commodity=commodity,
-                          currency=currency,
-                          date=price_date,
-                          value=price_value,
-                          type='last')
+        # Check if a price already exists for this date and commodity
+        existing_price = None
+        for price in book.prices:
+            if (price.commodity == commodity and
+                    price.date == price_date):
+                existing_price = price
+                break
 
-        # Add to book and commit
-        book.prices.append(new_price)
+        if existing_price:
+            # Update existing price
+            existing_price.value = price_value
+            existing_price.currency = currency
+            log.debug(f"Updated existing price to {price_value} {currency_mnemonic} for {namespace}:{commodity_mnemonic}")
+        else:
+            # Create new price
+            new_price = Price(commodity=commodity,
+                              currency=currency,
+                              date=price_date,
+                              value=price_value,
+                              type='last')
+            book.prices.append(new_price)
+            log.debug(f"Set new price {price_value} {currency_mnemonic} for {namespace}:{commodity_mnemonic}")
+
         book.save()
-        log.debug(f"Set price {price_value} {currency_mnemonic} for {namespace}:{commodity_mnemonic}")
 
     except Exception as e:
         log.exception(f"Failed to set commodity price: {str(e)}")
@@ -2346,7 +2360,8 @@ async def delete_account(ctx: RunContext[GnuCashQuery], account_name: str) -> st
     except Exception as e:
         return f"Error deleting account: {str(e)}"
 
-async def add_dummy_accounts(ctx: RunContext[GnuCashQuery]) -> str:
+@gnucash_agent.tool_plain
+async def add_dummy_accounts() -> str:
     """Add dummy accounts and transactions to the active GnuCash book for testings...
     Use this tool when the user asks for Dummy or Sample or Test account creation or addition.
 
